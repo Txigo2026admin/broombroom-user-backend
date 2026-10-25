@@ -5,7 +5,14 @@ const connectDB = require('./config/db');
 
 const app = express();
 
-app.use(cors());
+const corsOptions = {
+    origin: true, // Allow any origin that sends a request (including localhost ports and web preview)
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // Ensure DB is connected before handling any request
@@ -25,7 +32,8 @@ app.use('/api/car-categories', require('./routes/carCategoryRoutes'));
 app.use('/api/pricing-rules', require('./routes/pricingRuleRoutes'));
 app.use('/api/global-settings', require('./routes/globalSettingRoutes'));
 app.use('/api/cities', require('./routes/cityRoutes'));
-
+app.use('/api/airports', require('./routes/airportRoutes'));
+app.use('/api/payment', require('./routes/paymentRoutes'));
 app.get('/', (req, res) => {
     res.send('Broom Boom Cabs User Backend API is running...');
 });

@@ -1,0 +1,194 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model bookings {
+  id               String   @id @db.Uuid
+  bookingId        String?  @unique @db.VarChar(255)
+  customerName     String   @db.VarChar(255)
+  customerMobile   String   @db.VarChar(255)
+  customerEmail    String?  @db.VarChar(255)
+  serviceType      String   @db.VarChar(255)
+  wayType          String?  @db.VarChar(255)
+  airportDirection String?  @db.VarChar(255)
+  rentalPackage    String?  @db.VarChar(255)
+  state            String   @db.VarChar(255)
+  pincode          String?  @db.VarChar(255)
+  pickupAddress    String
+  dropAddress      String
+  distance         String?  @db.VarChar(255)
+  pickupLat        String?  @db.VarChar(255)
+  pickupLng        String?  @db.VarChar(255)
+  dropLat          String?  @db.VarChar(255)
+  dropLng          String?  @db.VarChar(255)
+  pickupDate       String   @db.VarChar(255)
+  pickupTime       String   @db.VarChar(255)
+  returnDate       String?  @db.VarChar(255)
+  returnTime       String?  @db.VarChar(255)
+  vehicleCategory  String   @db.VarChar(255)
+  seater           Int
+  acType           String?  @db.VarChar(255)
+  allocateOurPilot Boolean? @default(false)
+  eligiblePilots   Json?    @default("[]")
+  fare             Float
+  advance          Float?   @default(0)
+  dueFare          Float?   @default(0)
+  extraKm          String?  @db.VarChar(255)
+  extraHour        String?  @db.VarChar(255)
+  waitingCharges   String?  @db.VarChar(255)
+  nightAllowance   String?  @db.VarChar(255)
+  tollTax          String?  @default("Excluded") @db.VarChar(255)
+  status           String?  @default("Pending") @db.VarChar(255)
+  timeline         Json?    @default("[]")
+  driverName       String?  @db.VarChar(255)
+  driverNumber     String?  @db.VarChar(255)
+  carNo            String?  @db.VarChar(255)
+  createdAt        DateTime @db.Timestamptz(6)
+  updatedAt        DateTime @db.Timestamptz(6)
+}
+
+model car_categories {
+  id          String   @id @db.Uuid
+  name        String   @unique @db.VarChar(255)
+  displayName String   @db.VarChar(255)
+  seater      Int
+  baseFare    Float
+  perKmRate   Float
+  status      String?  @default("Active") @db.VarChar(255)
+  createdAt   DateTime @db.Timestamptz(6)
+  updatedAt   DateTime @db.Timestamptz(6)
+}
+
+model cities {
+  id          String   @id @db.Uuid
+  name        String   @db.VarChar(255)
+  displayName String   @db.VarChar(255)
+  lat         String   @db.VarChar(255)
+  lon         String   @db.VarChar(255)
+  state       String?  @db.VarChar(255)
+  country     String?  @default("India") @db.VarChar(255)
+  placeId     String?  @unique @db.VarChar(255)
+  status      String?  @default("Active") @db.VarChar(255)
+  createdAt   DateTime @db.Timestamptz(6)
+  updatedAt   DateTime @db.Timestamptz(6)
+}
+
+model global_settings {
+  id        String   @id @db.Uuid
+  key       String   @unique @db.VarChar(255)
+  value     Json
+  createdAt DateTime @db.Timestamptz(6)
+  updatedAt DateTime @db.Timestamptz(6)
+}
+
+model pricing_rules {
+  id              String   @id @db.Uuid
+  rideType        String   @db.VarChar(255)
+  sourceCity      String?  @db.VarChar(255)
+  destinationCity String?  @db.VarChar(255)
+  state           String?  @db.VarChar(255)
+  city            String?  @db.VarChar(255)
+  category        String   @db.VarChar(255)
+  baseFare        Float?   @default(0)
+  perKmRate       Float?   @default(0)
+  fixedFare       Float?   @default(0)
+  minKmsPerDay    Float?   @default(250)
+  driverAllowance Float?   @default(250)
+  nightAllowance  Float?   @default(250)
+  packages        Json?    @default("[]")
+  status          String?  @default("Active") @db.VarChar(255)
+  createdAt       DateTime @db.Timestamptz(6)
+  updatedAt       DateTime @db.Timestamptz(6)
+}
+
+model rental_packages {
+  id            String   @id @db.Uuid
+  state         String   @db.VarChar(255)
+  carCategory   String   @db.VarChar(255)
+  acType        String?  @default("Any") @db.VarChar(255)
+  seater        Int?
+  packageHours  Int
+  includedKms   Int
+  baseFare      Float
+  extraKmRate   Float?   @default(0)
+  extraHourRate Float?   @default(0)
+  advanceType   String?  @default("Percentage") @db.VarChar(255)
+  advanceValue  Float?   @default(20)
+  status        String?  @default("Active") @db.VarChar(255)
+  createdAt     DateTime @db.Timestamptz(6)
+  updatedAt     DateTime @db.Timestamptz(6)
+}
+
+model route_pricings {
+  id                    String   @id @db.Uuid
+  pickupLocation        String   @db.VarChar(255)
+  dropLocation          String   @db.VarChar(255)
+  pickupLat             Float?
+  pickupLng             Float?
+  dropLat               Float?
+  dropLng               Float?
+  nearbyRadiusKm        Float?   @default(25)
+  rideCategory          String   @db.VarChar(255)
+  carCategory           String   @db.VarChar(255)
+  acType                String?  @default("Any") @db.VarChar(255)
+  seater                Int?
+  fixedPrice            Float
+  includeToll           Boolean? @default(false)
+  includeParking        Boolean? @default(false)
+  includeNightAllowance Boolean? @default(false)
+  advanceType           String?  @default("Percentage") @db.VarChar(255)
+  advanceValue          Float?   @default(20)
+  status                String?  @default("Active") @db.VarChar(255)
+  createdAt             DateTime @db.Timestamptz(6)
+  updatedAt             DateTime @db.Timestamptz(6)
+}
+
+model state_pricings {
+  id             String   @id @db.Uuid
+  state          String   @db.VarChar(255)
+  rideCategory   String   @db.VarChar(255)
+  carCategory    String   @db.VarChar(255)
+  acType         String?  @default("Any") @db.VarChar(255)
+  seater         Int
+  ratePerKm      Float?   @default(0)
+  hourlyRate     Float?   @default(0)
+  minKms         Float?   @default(0)
+  driverBata     Float?   @default(0)
+  extraKmRate    Float?   @default(0)
+  extraHourRate  Float?   @default(0)
+  waitingCharge  Float?   @default(2)
+  nightAllowance Float?   @default(0)
+  advanceType    String?  @default("Percentage") @db.VarChar(255)
+  advanceValue   Float?   @default(20)
+  status         String?  @default("Active") @db.VarChar(255)
+  createdAt      DateTime @db.Timestamptz(6)
+  updatedAt      DateTime @db.Timestamptz(6)
+}
+
+model users {
+  id           String    @id @db.Uuid
+  name         String    @db.VarChar(255)
+  email        String?   @unique @db.VarChar(255)
+  phone        String    @unique @db.VarChar(255)
+  status       String?   @default("Active") @db.VarChar(255)
+  loginCount   Int?      @default(1)
+  leadType     String?   @default("New") @db.VarChar(50)
+  registeredAt DateTime? @db.Timestamptz(6)
+  createdAt    DateTime  @db.Timestamptz(6)
+  updatedAt    DateTime  @db.Timestamptz(6)
+}
+model otp_verifications {
+  id         String   @id @db.Uuid
+  phone      String   @db.VarChar(255)
+  otpHash    String   @db.VarChar(255)
+  expiresAt  DateTime @db.Timestamptz(6)
+  attempts   Int      @default(0)
+  verified   Boolean  @default(false)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+
+  @@index([phone])
+}

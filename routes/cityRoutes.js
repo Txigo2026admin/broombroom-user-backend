@@ -1,6 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const { getCities, saveCity, updateCity } = require('../controllers/cityController');
+const { getCities, saveCity, updateCity, searchCities } = require('../controllers/cityController');
+
+router.get('/search', searchCities);
 
 router.route('/')
     .get(getCities)

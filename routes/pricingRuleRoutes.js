@@ -23,11 +23,13 @@ const {
     getRentalRules,
     createRentalRule,
     updateRentalRule,
-    deleteRentalRule
+    deleteRentalRule,
+    calculateDistance
 } = require('../controllers/pricingRuleController');
 
 // Calculation Engine
 router.post('/calculate', calculatePrice);
+router.post('/distance', calculateDistance);
 
 // State-wise General Pricing
 router.route('/state')

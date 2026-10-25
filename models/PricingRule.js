@@ -1,66 +1,72 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const pricingRuleSchema = new mongoose.Schema({
+const PricingRule = sequelize.define('PricingRule', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     rideType: {
-        type: String,
-        required: true,
-        enum: ['Oneway', 'Roundtrip', 'Local', 'Airport']
+        type: DataTypes.STRING,
+        allowNull: false
     },
-    // For route-based (Oneway/Roundtrip)
-    sourceCity: String,
-    destinationCity: String,
-    
-    // For location-based (General state/city rules)
-    state: String,
-    city: String,
-
+    sourceCity: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    destinationCity: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    state: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    city: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
     category: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
-    
-    // Pricing details
     baseFare: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     perKmRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     fixedFare: {
-        type: Number, // If set, this overrides per-km calculation
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
-    
-    // Roundtrip specific
     minKmsPerDay: {
-        type: Number,
-        default: 250
+        type: DataTypes.FLOAT,
+        defaultValue: 250
     },
     driverAllowance: {
-        type: Number,
-        default: 250
+        type: DataTypes.FLOAT,
+        defaultValue: 250
     },
     nightAllowance: {
-        type: Number,
-        default: 250
+        type: DataTypes.FLOAT,
+        defaultValue: 250
     },
-
-    // Local Rental specific
-    packages: [{
-        hours: Number,
-        kms: Number,
-        price: Number
-    }],
-
+    packages: {
+        type: DataTypes.JSONB,
+        defaultValue: []
+    },
     status: {
-        type: String,
-        enum: ['Active', 'Inactive'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
     }
 }, {
+    tableName: 'pricing_rules',
     timestamps: true
 });
 
-module.exports = mongoose.model('PricingRule', pricingRuleSchema);
+module.exports = attachMongooseCompatibility(PricingRule);

@@ -1,78 +1,80 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const statePricingSchema = new mongoose.Schema({
+const StatePricing = sequelize.define('StatePricing', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     state: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     rideCategory: {
-        type: String,
-        required: true,
-        enum: ['Oneway', 'Roundtrip', 'Rental', 'Airport', 'Station']
+        type: DataTypes.STRING,
+        allowNull: false
     },
     carCategory: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     acType: {
-        type: String,
-        enum: ['AC', 'Non-AC', 'Any'],
-        default: 'Any'
+        type: DataTypes.STRING,
+        defaultValue: 'Any'
     },
     seater: {
-        type: Number,
-        required: true
+        type: DataTypes.INTEGER,
+        allowNull: false
     },
-    // Rates & Allowances
     ratePerKm: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     hourlyRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     minKms: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     driverBata: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     extraKmRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     extraHourRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     waitingCharge: {
-        type: Number,
-        default: 2 // default waiting charge ₹2/min
+        type: DataTypes.FLOAT,
+        defaultValue: 2
     },
     nightAllowance: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
-    // Advance payment config
     advanceType: {
-        type: String,
-        enum: ['Percentage', 'Fixed'],
-        default: 'Percentage'
+        type: DataTypes.STRING,
+        defaultValue: 'Percentage'
     },
     advanceValue: {
-        type: Number,
-        default: 20
+        type: DataTypes.FLOAT,
+        defaultValue: 20
     },
     status: {
-        type: String,
-        enum: ['Active', 'Inactive'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
     }
 }, {
+    tableName: 'state_pricings',
     timestamps: true
 });
 
-module.exports = mongoose.model('StatePricing', statePricingSchema);
+module.exports = attachMongooseCompatibility(StatePricing);

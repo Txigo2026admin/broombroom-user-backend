@@ -1,5 +1,5 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
+const connectDB = require('./config/db');
 const User = require('./models/User');
 const CarCategory = require('./models/CarCategory');
 const Booking = require('./models/Booking');
@@ -12,8 +12,8 @@ const City = require('./models/City');
 
 const seedData = async () => {
     try {
-        await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/broomboom_user_db');
-        console.log('Connected to DB for seeding...');
+        await connectDB();
+        console.log('Connected to PostgreSQL for seeding...');
 
         // Clear existing data
         await User.deleteMany();
@@ -49,23 +49,36 @@ const seedData = async () => {
 
         // Seed Car Categories
         await CarCategory.create([
-            { name: 'Hatchback', displayName: 'Hatchback', seater: 4, baseFare: 50, perKmRate: 10 },
-            { name: 'Sedan', displayName: 'Sedan', seater: 4, baseFare: 50, perKmRate: 13 },
-            { name: 'SUV', displayName: 'SUV (Ertiga)', seater: 6, baseFare: 80, perKmRate: 15 },
-            { name: 'SUV+', displayName: 'Luxury SUV (Crysta)', seater: 7, baseFare: 120, perKmRate: 20 }
+            { name: 'Sedan', displayName: 'Sedan', seater: 4, baseFare: 50, perKmRate: 15 },
+            { name: 'SUV', displayName: 'SUV (Ertiga)', seater: 6, baseFare: 80, perKmRate: 20 },
+            { name: 'SUV+', displayName: 'Luxury SUV (Crysta)', seater: 7, baseFare: 120, perKmRate: 25 },
+            { name: '13 Seater Traveller', displayName: '13 Seater Traveller', seater: 13, baseFare: 200, perKmRate: 40 },
+            { name: '17 Seater Traveller', displayName: '17 Seater Traveller', seater: 17, baseFare: 250, perKmRate: 45 },
+            { name: '25 Seater Traveller', displayName: '25 Seater Traveller', seater: 25, baseFare: 300, perKmRate: 50 }
         ]);
         console.log('Car Categories seeded');
 
         // Seed State-wise General Pricing
         await StatePricing.create([
-            // West Bengal default fallback rates
-            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: 'Sedan', seater: 4, ratePerKm: 13, minKms: 100, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
-            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: 'Hatchback', seater: 4, ratePerKm: 10, minKms: 100, driverBata: 200, nightAllowance: 200, advanceValue: 20 },
-            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: 'Sedan', seater: 4, ratePerKm: 13, hourlyRate: 120, minKms: 250, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
+            // West Bengal default rates
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: 'Sedan', seater: 4, ratePerKm: 15, minKms: 100, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: 'SUV', seater: 6, ratePerKm: 20, minKms: 100, driverBata: 300, nightAllowance: 300, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: 'SUV+', seater: 7, ratePerKm: 25, minKms: 100, driverBata: 350, nightAllowance: 350, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: '13 Seater Traveller', seater: 13, ratePerKm: 40, minKms: 150, driverBata: 450, nightAllowance: 450, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: '17 Seater Traveller', seater: 17, ratePerKm: 45, minKms: 150, driverBata: 500, nightAllowance: 500, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Oneway', carCategory: '25 Seater Traveller', seater: 25, ratePerKm: 50, minKms: 150, driverBata: 600, nightAllowance: 600, advanceValue: 20 },
+
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: 'Sedan', seater: 4, ratePerKm: 15, hourlyRate: 120, minKms: 250, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: 'SUV', seater: 6, ratePerKm: 20, hourlyRate: 150, minKms: 250, driverBata: 300, nightAllowance: 300, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: 'SUV+', seater: 7, ratePerKm: 25, hourlyRate: 200, minKms: 250, driverBata: 350, nightAllowance: 350, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: '13 Seater Traveller', seater: 13, ratePerKm: 40, hourlyRate: 250, minKms: 250, driverBata: 450, nightAllowance: 450, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: '17 Seater Traveller', seater: 17, ratePerKm: 45, hourlyRate: 300, minKms: 250, driverBata: 500, nightAllowance: 500, advanceValue: 20 },
+            { state: 'West Bengal', rideCategory: 'Roundtrip', carCategory: '25 Seater Traveller', seater: 25, ratePerKm: 50, hourlyRate: 350, minKms: 250, driverBata: 600, nightAllowance: 600, advanceValue: 20 },
             
             // Maharashtra default fallback rates
-            { state: 'Maharashtra', rideCategory: 'Oneway', carCategory: 'Sedan', seater: 4, ratePerKm: 14, minKms: 100, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
-            { state: 'Maharashtra', rideCategory: 'Roundtrip', carCategory: 'SUV', seater: 6, ratePerKm: 18, hourlyRate: 150, minKms: 300, driverBata: 300, nightAllowance: 300, advanceValue: 20 }
+            { state: 'Maharashtra', rideCategory: 'Oneway', carCategory: 'Sedan', seater: 4, ratePerKm: 15, minKms: 100, driverBata: 250, nightAllowance: 250, advanceValue: 20 },
+            { state: 'Maharashtra', rideCategory: 'Oneway', carCategory: 'SUV', seater: 6, ratePerKm: 20, minKms: 100, driverBata: 300, nightAllowance: 300, advanceValue: 20 },
+            { state: 'Maharashtra', rideCategory: 'Roundtrip', carCategory: 'SUV', seater: 6, ratePerKm: 20, hourlyRate: 150, minKms: 300, driverBata: 300, nightAllowance: 300, advanceValue: 20 }
         ]);
         console.log('State Pricing seeded');
 
@@ -87,7 +100,37 @@ const seedData = async () => {
                 advanceType: 'Percentage',
                 advanceValue: 20
             },
-            // Kolkata Airport to Salt Lake (e.g. Airport Transfer fixed price)
+            {
+                pickupLocation: 'Kolkata Airport',
+                dropLocation: 'Digha',
+                pickupLat: 22.6547,
+                pickupLng: 88.4467,
+                dropLat: 21.6266,
+                dropLng: 87.5074,
+                nearbyRadiusKm: 25,
+                rideCategory: 'Oneway',
+                carCategory: 'SUV',
+                seater: 6,
+                fixedPrice: 4800,
+                advanceType: 'Percentage',
+                advanceValue: 20
+            },
+            {
+                pickupLocation: 'Kolkata Airport',
+                dropLocation: 'Digha',
+                pickupLat: 22.6547,
+                pickupLng: 88.4467,
+                dropLat: 21.6266,
+                dropLng: 87.5074,
+                nearbyRadiusKm: 25,
+                rideCategory: 'Oneway',
+                carCategory: 'SUV+',
+                seater: 7,
+                fixedPrice: 6200,
+                advanceType: 'Percentage',
+                advanceValue: 20
+            },
+            // Kolkata Airport to Salt Lake (Airport Transfer fixed price)
             {
                 pickupLocation: 'Kolkata Airport',
                 dropLocation: 'Salt Lake',
@@ -100,6 +143,40 @@ const seedData = async () => {
                 carCategory: 'Sedan',
                 seater: 4,
                 fixedPrice: 899,
+                includeToll: true,
+                includeParking: true,
+                advanceType: 'Percentage',
+                advanceValue: 15
+            },
+            {
+                pickupLocation: 'Kolkata Airport',
+                dropLocation: 'Salt Lake',
+                pickupLat: 22.6547,
+                pickupLng: 88.4467,
+                dropLat: 22.5726,
+                dropLng: 88.4348,
+                nearbyRadiusKm: 25,
+                rideCategory: 'Airport',
+                carCategory: 'SUV',
+                seater: 6,
+                fixedPrice: 1299,
+                includeToll: true,
+                includeParking: true,
+                advanceType: 'Percentage',
+                advanceValue: 15
+            },
+            {
+                pickupLocation: 'Kolkata Airport',
+                dropLocation: 'Salt Lake',
+                pickupLat: 22.6547,
+                pickupLng: 88.4467,
+                dropLat: 22.5726,
+                dropLng: 88.4348,
+                nearbyRadiusKm: 25,
+                rideCategory: 'Airport',
+                carCategory: 'SUV+',
+                seater: 7,
+                fixedPrice: 1799,
                 includeToll: true,
                 includeParking: true,
                 advanceType: 'Percentage',

@@ -1,12 +1,12 @@
 require('dotenv').config();
-const mongoose = require('mongoose');
+const connectDB = require('./config/db');
 const pricingService = require('./services/pricingService');
 
 async function runTests() {
     try {
         console.log('Connecting to database for pricing tests...');
-        await mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/broomboom_user_db');
-        console.log('Connected.');
+        await connectDB();
+        console.log('Connected to PostgreSQL.');
 
         // Test Helper
         const testCase = async (name, params, validator) => {

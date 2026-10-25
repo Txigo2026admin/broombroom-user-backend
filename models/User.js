@@ -1,31 +1,46 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const userSchema = new mongoose.Schema({
+const User = sequelize.define('User', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     name: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     email: {
-        type: String,
-        unique: true,
-        sparse: true
+        type: DataTypes.STRING,
+        allowNull: true,
+        unique: true
     },
     phone: {
-        type: String,
-        required: true,
+        type: DataTypes.STRING,
+        allowNull: false,
         unique: true
     },
     status: {
-        type: String,
-        enum: ['Active', 'Suspended'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
+    },
+    loginCount: {
+        type: DataTypes.INTEGER,
+        defaultValue: 1
+    },
+    leadType: {
+        type: DataTypes.STRING,
+        defaultValue: 'New'
     },
     registeredAt: {
-        type: Date,
-        default: Date.now
+        type: DataTypes.DATE,
+        defaultValue: DataTypes.NOW
     }
 }, {
+    tableName: 'users',
     timestamps: true
 });
 
-module.exports = mongoose.model('User', userSchema);
+module.exports = attachMongooseCompatibility(User);

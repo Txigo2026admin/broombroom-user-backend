@@ -1,38 +1,49 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const citySchema = new mongoose.Schema({
+const City = sequelize.define('City', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     name: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     displayName: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     lat: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     lon: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     state: {
-        type: String
+        type: DataTypes.STRING,
+        allowNull: true
     },
     country: {
-        type: String,
-        default: 'India'
+        type: DataTypes.STRING,
+        defaultValue: 'India'
     },
     placeId: {
-        type: String,
+        type: DataTypes.STRING,
+        allowNull: true,
         unique: true
     },
     status: {
-        type: String,
-        enum: ['Active', 'Inactive'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
     }
-}, { timestamps: true });
+}, {
+    tableName: 'cities',
+    timestamps: true
+});
 
-module.exports = mongoose.model('City', citySchema);
+module.exports = attachMongooseCompatibility(City);

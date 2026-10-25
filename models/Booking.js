@@ -1,84 +1,326 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const bookingSchema = new mongoose.Schema({
-    bookingId: { type: String, unique: true, sparse: true },
-    customerName: { type: String, required: true },
-    customerMobile: { type: String, required: true },
-    customerEmail: String,
-    
-    serviceType: {
-        type: String,
-        required: true
-    },
-    wayType: { type: String },
-    airportDirection: { type: String },
-    rentalPackage: { type: String },
-    
-    state: { type: String, required: true },
-    pincode: String,
+const Booking = sequelize.define(
+    'Booking',
+    {
+        // =====================================================
+        // BASIC BOOKING INFORMATION
+        // =====================================================
 
-    // Route Information
-    pickupAddress: { type: String, required: true },
-    dropAddress: { type: String, required: true },
-    distance: String,
+        id: {
+            type: DataTypes.UUID,
+            defaultValue: DataTypes.UUIDV4,
+            primaryKey: true
+        },
 
-    // GPS Coordinates
-    pickupLat: String,
-    pickupLng: String,
-    dropLat: String,
-    dropLng: String,
+        bookingId: {
+            type: DataTypes.STRING,
+            unique: true,
+            allowNull: true
+        },
 
-    // Schedule Details
-    pickupDate: { type: String, required: true },
-    pickupTime: { type: String, required: true },
-    returnDate: String,
-    returnTime: String,
+        // =====================================================
+        // CUSTOMER
+        // =====================================================
 
-    // Vehicle & Pilot Selection
-    vehicleCategory: { type: String, required: true },
-    seater: { type: Number, required: true },
-    acType: String,
-    allocateOurPilot: { type: Boolean, default: false },
-    eligiblePilots: [{ type: String }],
+        customerName: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
 
-    // Fare & Charges
-    fare: { type: Number, required: true },
-    advance: { type: Number, default: 0 },
-    dueFare: { type: Number, default: 0 },
-    extraKm: String,
-    extraHour: String,
-    waitingCharges: String,
-    nightAllowance: String,
-    tollTax: { type: String, enum: ['Included', 'Excluded'], default: 'Excluded' },
+        customerMobile: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
 
-    status: {
-        type: String,
-        enum: ['Pending', 'Confirmed', 'Completed', 'Cancelled'],
-        default: 'Pending'
-    },
-    timeline: [
-        {
-            status: String,
-            message: String,
-            timestamp: { type: Date, default: Date.now }
+        customerEmail: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        // =====================================================
+        // SERVICE
+        // =====================================================
+
+        serviceType: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
+
+        wayType: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        airportDirection: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        airportTerminal: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        rentalPackage: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        // =====================================================
+        // LOCATION
+        // =====================================================
+
+        state: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
+
+        pincode: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        pickupAddress: {
+            type: DataTypes.TEXT,
+            allowNull: false
+        },
+
+        dropAddress: {
+            type: DataTypes.TEXT,
+            allowNull: false
+        },
+
+        distance: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        pickupLat: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        pickupLng: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        dropLat: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        dropLng: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        // =====================================================
+        // DATE / TIME
+        // =====================================================
+
+        pickupDate: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
+
+        pickupTime: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
+
+        returnDate: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        returnTime: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        // =====================================================
+        // VEHICLE
+        // =====================================================
+
+        vehicleCategory: {
+            type: DataTypes.STRING,
+            allowNull: false
+        },
+
+        seater: {
+            type: DataTypes.INTEGER,
+            allowNull: false
+        },
+
+        acType: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        allocateOurPilot: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false
+        },
+
+        eligiblePilots: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
+
+        // =====================================================
+        // FARE
+        // =====================================================
+
+        fare: {
+            type: DataTypes.FLOAT,
+            allowNull: false
+        },
+
+        advance: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
+        dueFare: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
+        // =====================================================
+        // CASHFREE PAYMENT
+        // =====================================================
+
+        cashfreeOrderId: {
+            type: DataTypes.STRING,
+            allowNull: true,
+            unique: true
+        },
+
+        paymentStatus: {
+            type: DataTypes.STRING,
+            allowNull: false,
+            defaultValue: 'PENDING'
+        },
+
+        paidAmount: {
+            type: DataTypes.FLOAT,
+            allowNull: false,
+            defaultValue: 0
+        },
+
+        paymentMethod: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        paymentDate: {
+            type: DataTypes.DATE,
+            allowNull: true
+        },
+
+        // =====================================================
+        // EXTRA CHARGES
+        // =====================================================
+
+        extraKm: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        extraHour: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        waitingCharges: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        nightAllowance: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        tollTax: {
+            type: DataTypes.STRING,
+            defaultValue: 'Excluded'
+        },
+
+        // =====================================================
+        // BOOKING STATUS
+        // =====================================================
+
+        status: {
+            type: DataTypes.STRING,
+            defaultValue: 'Pending'
+        },
+
+        timeline: {
+            type: DataTypes.JSONB,
+            defaultValue: []
+        },
+
+        // =====================================================
+        // DRIVER
+        // =====================================================
+
+        driverName: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        driverNumber: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        carNo: {
+            type: DataTypes.STRING,
+            allowNull: true
         }
-    ],
-    driverName: { type: String },
-    driverNumber: { type: String },
-    carNo: { type: String }
-}, {
-    timestamps: true
-});
+    },
+    {
+        tableName: 'bookings',
+        timestamps: true
+    }
+);
 
-// Generate a random booking ID before saving
-bookingSchema.pre('save', async function() {
-    if (!this.bookingId) {
+
+// =========================================================
+// GENERATE BOOKING ID
+// =========================================================
+
+Booking.beforeCreate((booking) => {
+    if (!booking.bookingId) {
         const date = new Date();
-        const year = date.getFullYear().toString().slice(-2);
-        const month = (date.getMonth() + 1).toString().padStart(2, '0');
-        const random = Math.floor(1000 + Math.random() * 9000);
-        this.bookingId = `TX${year}${month}${random}`;
+
+        const year = date
+            .getFullYear()
+            .toString()
+            .slice(-2);
+
+        const month = (date.getMonth() + 1)
+            .toString()
+            .padStart(2, '0');
+
+        const random = Math.floor(
+            1000 + Math.random() * 9000
+        );
+
+        booking.bookingId =
+            `TX${year}${month}${random}`;
     }
 });
 
-module.exports = mongoose.model('Booking', bookingSchema);
+
+// =========================================================
+// EXPORT
+// =========================================================
+
+module.exports =
+    attachMongooseCompatibility(Booking);

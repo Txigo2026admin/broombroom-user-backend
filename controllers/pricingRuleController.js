@@ -3,6 +3,7 @@ const RoutePricing = require('../models/RoutePricing');
 const RentalPackage = require('../models/RentalPackage');
 const PricingRule = require('../models/PricingRule');
 const pricingService = require('../services/pricingService');
+const mapService = require('../services/mapService');
 
 // @desc    Calculate Price
 // @route   POST /api/pricing-rules/calculate
@@ -12,6 +13,34 @@ exports.calculatePrice = async (req, res) => {
         res.status(200).json(result);
     } catch (error) {
         res.status(500).json({ message: error.message });
+    }
+};
+
+// @desc    Calculate distance via Map API (OSRM / Nominatim)
+// @route   POST /api/pricing-rules/distance
+exports.calculateDistance = async (req, res) => {
+    try {
+        const { from, to, pickupLat, pickupLng, dropLat, dropLng } = req.body;
+        const result = await mapService.calculateDistanceBetween({
+            from,
+            to,
+            pickupLat,
+            pickupLng,
+            dropLat,
+            dropLng
+        });
+        res.status(200).json({
+            success: true,
+            distance: result.distanceKm,
+            durationMinutes: result.durationMinutes,
+            source: result.source,
+            pickupCoords: result.pickupCoords,
+            dropCoords: result.dropCoords,
+            pickupAddress: result.pickupAddress,
+            dropAddress: result.dropAddress
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
     }
 };
 

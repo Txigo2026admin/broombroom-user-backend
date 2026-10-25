@@ -1,84 +1,88 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const routePricingSchema = new mongoose.Schema({
+const RoutePricing = sequelize.define('RoutePricing', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     pickupLocation: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     dropLocation: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     pickupLat: {
-        type: Number,
-        required: false
+        type: DataTypes.FLOAT,
+        allowNull: true
     },
     pickupLng: {
-        type: Number,
-        required: false
+        type: DataTypes.FLOAT,
+        allowNull: true
     },
     dropLat: {
-        type: Number,
-        required: false
+        type: DataTypes.FLOAT,
+        allowNull: true
     },
     dropLng: {
-        type: Number,
-        required: false
+        type: DataTypes.FLOAT,
+        allowNull: true
     },
     nearbyRadiusKm: {
-        type: Number,
-        default: 25
+        type: DataTypes.FLOAT,
+        defaultValue: 25
     },
     rideCategory: {
-        type: String,
-        required: true,
-        enum: ['Oneway', 'Roundtrip', 'Rental', 'Airport', 'Station']
+        type: DataTypes.STRING,
+        allowNull: false
     },
     carCategory: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     acType: {
-        type: String,
-        enum: ['AC', 'Non-AC', 'Any'],
-        default: 'Any'
+        type: DataTypes.STRING,
+        defaultValue: 'Any'
     },
     seater: {
-        type: Number,
-        required: false
+        type: DataTypes.INTEGER,
+        allowNull: true
     },
     fixedPrice: {
-        type: Number,
-        required: true
+        type: DataTypes.FLOAT,
+        allowNull: false
     },
     includeToll: {
-        type: Boolean,
-        default: false
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
     },
     includeParking: {
-        type: Boolean,
-        default: false
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
     },
     includeNightAllowance: {
-        type: Boolean,
-        default: false
+        type: DataTypes.BOOLEAN,
+        defaultValue: false
     },
     advanceType: {
-        type: String,
-        enum: ['Percentage', 'Fixed'],
-        default: 'Percentage'
+        type: DataTypes.STRING,
+        defaultValue: 'Percentage'
     },
     advanceValue: {
-        type: Number,
-        default: 20
+        type: DataTypes.FLOAT,
+        defaultValue: 20
     },
     status: {
-        type: String,
-        enum: ['Active', 'Inactive'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
     }
 }, {
+    tableName: 'route_pricings',
     timestamps: true
 });
 
-module.exports = mongoose.model('RoutePricing', routePricingSchema);
+module.exports = attachMongooseCompatibility(RoutePricing);

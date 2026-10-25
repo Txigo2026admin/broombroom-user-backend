@@ -1,17 +1,25 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const globalSettingSchema = new mongoose.Schema({
+const GlobalSetting = sequelize.define('GlobalSetting', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     key: {
-        type: String,
-        required: true,
+        type: DataTypes.STRING,
+        allowNull: false,
         unique: true
     },
     value: {
-        type: mongoose.Schema.Types.Mixed,
-        required: true
+        type: DataTypes.JSONB,
+        allowNull: false
     }
 }, {
+    tableName: 'global_settings',
     timestamps: true
 });
 
-module.exports = mongoose.model('GlobalSetting', globalSettingSchema);
+module.exports = attachMongooseCompatibility(GlobalSetting);

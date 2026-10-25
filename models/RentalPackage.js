@@ -1,59 +1,64 @@
-const mongoose = require('mongoose');
+const { DataTypes } = require('sequelize');
+const { sequelize } = require('../config/db');
+const { attachMongooseCompatibility } = require('./baseModel');
 
-const rentalPackageSchema = new mongoose.Schema({
+const RentalPackage = sequelize.define('RentalPackage', {
+    id: {
+        type: DataTypes.UUID,
+        defaultValue: DataTypes.UUIDV4,
+        primaryKey: true
+    },
     state: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     carCategory: {
-        type: String,
-        required: true
+        type: DataTypes.STRING,
+        allowNull: false
     },
     acType: {
-        type: String,
-        enum: ['AC', 'Non-AC', 'Any'],
-        default: 'Any'
+        type: DataTypes.STRING,
+        defaultValue: 'Any'
     },
     seater: {
-        type: Number,
-        required: false
+        type: DataTypes.INTEGER,
+        allowNull: true
     },
     packageHours: {
-        type: Number,
-        required: true
+        type: DataTypes.INTEGER,
+        allowNull: false
     },
     includedKms: {
-        type: Number,
-        required: true
+        type: DataTypes.INTEGER,
+        allowNull: false
     },
     baseFare: {
-        type: Number,
-        required: true
+        type: DataTypes.FLOAT,
+        allowNull: false
     },
     extraKmRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     extraHourRate: {
-        type: Number,
-        default: 0
+        type: DataTypes.FLOAT,
+        defaultValue: 0
     },
     advanceType: {
-        type: String,
-        enum: ['Percentage', 'Fixed'],
-        default: 'Percentage'
+        type: DataTypes.STRING,
+        defaultValue: 'Percentage'
     },
     advanceValue: {
-        type: Number,
-        default: 20
+        type: DataTypes.FLOAT,
+        defaultValue: 20
     },
     status: {
-        type: String,
-        enum: ['Active', 'Inactive'],
-        default: 'Active'
+        type: DataTypes.STRING,
+        defaultValue: 'Active'
     }
 }, {
+    tableName: 'rental_packages',
     timestamps: true
 });
 
-module.exports = mongoose.model('RentalPackage', rentalPackageSchema);
+module.exports = attachMongooseCompatibility(RentalPackage);

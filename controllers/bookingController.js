@@ -74,7 +74,7 @@ exports.calculateFare = async (req, res) => {
             res.status(200).json({
                 baseFare: result.details.baseFare || 0,
                 perKmRate: result.details.ratePerKm || 0,
-                distance: parseFloat(req.body.distance || 0),
+                distance: result.distance || parseFloat(req.body.distance || 0),
                 multiplier: result.multiplier,
                 totalFare: result.fare,
                 fare: result.fare,
