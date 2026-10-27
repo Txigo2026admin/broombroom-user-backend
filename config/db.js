@@ -7,16 +7,20 @@ const rawDatabaseUrl = process.env.DATABASE_URL ||
 // 1. Strip query parameters (like ?sslmode=require) so they don't override dialectOptions
 const databaseUrl = rawDatabaseUrl.split('?')[0];
 
-// 2. Enable SSL for any non-local connection, or when explicitly in production
-const isRemoteOrProd = 
+// 2. Enable SSL for remote/hosted databases (Neon, Supabase, Render, RDS), disable for local development
+const isExplicitSslDisabled = process.env.DB_SSL === 'false';
+const isExplicitSslEnabled = process.env.DB_SSL === 'true';
+const isLocal = rawDatabaseUrl.includes('127.0.0.1') || rawDatabaseUrl.includes('localhost');
+
+const useSsl = isExplicitSslEnabled || (!isExplicitSslDisabled && !isLocal && (
     process.env.NODE_ENV === 'production' ||
-    Boolean(process.env.DATABASE_URL) ||
-    (!rawDatabaseUrl.includes('127.0.0.1') && !rawDatabaseUrl.includes('localhost'));
+    Boolean(process.env.DATABASE_URL)
+));
 
 const sequelize = new Sequelize(databaseUrl, {
     dialect: 'postgres',
     logging: false,
-    dialectOptions: isRemoteOrProd
+    dialectOptions: useSsl
         ? {
             ssl: {
                 require: true,
@@ -39,7 +43,10 @@ const connectDB = async () => {
 
     try {
         await sequelize.authenticate();
-        require('../models');
+        const models = require('../models');
+        if (models.AirportPricing) {
+            await models.AirportPricing.sync({ alter: true }).catch(() => {});
+        }
         isConnected = true;
         console.log('PostgreSQL connected successfully');
     } catch (error) {

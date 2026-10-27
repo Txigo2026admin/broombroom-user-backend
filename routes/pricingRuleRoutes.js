@@ -24,12 +24,27 @@ const {
     createRentalRule,
     updateRentalRule,
     deleteRentalRule,
+
+    // Airport Pricing
+    getAirportRules,
+    createAirportRule,
+    updateAirportRule,
+    deleteAirportRule,
+
     calculateDistance
 } = require('../controllers/pricingRuleController');
 
 // Calculation Engine
 router.post('/calculate', calculatePrice);
 router.post('/distance', calculateDistance);
+
+// Airport Transfer Pricing (0-15 km base, extra kms, waiting, night allowance, threshold)
+router.route('/airport')
+    .get(getAirportRules)
+    .post(createAirportRule);
+router.route('/airport/:id')
+    .put(updateAirportRule)
+    .delete(deleteAirportRule);
 
 // State-wise General Pricing
 router.route('/state')

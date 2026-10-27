@@ -8,6 +8,7 @@ const RoutePricing = require('./RoutePricing');
 const RentalPackage = require('./RentalPackage');
 const City = require('./City');
 const Airport = require('./Airport');
+const AirportPricing = require('./AirportPricing');
 
 module.exports = {
     User,
@@ -19,5 +20,6 @@ module.exports = {
     RoutePricing,
     RentalPackage,
     City,
-    Airport
+    Airport,
+    AirportPricing
 };

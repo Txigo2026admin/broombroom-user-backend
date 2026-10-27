@@ -12,6 +12,11 @@ const StatePricing = sequelize.define('StatePricing', {
         type: DataTypes.STRING,
         allowNull: false
     },
+    city: {
+        type: DataTypes.STRING,
+        allowNull: true,
+        defaultValue: null
+    },
     rideCategory: {
         type: DataTypes.STRING,
         allowNull: false
@@ -56,9 +61,29 @@ const StatePricing = sequelize.define('StatePricing', {
         type: DataTypes.FLOAT,
         defaultValue: 2
     },
+    waitingChargePerHour: {
+        type: DataTypes.FLOAT,
+        defaultValue: 150
+    },
+    waitingFreeMins: {
+        type: DataTypes.INTEGER,
+        defaultValue: 60
+    },
     nightAllowance: {
         type: DataTypes.FLOAT,
-        defaultValue: 0
+        defaultValue: 250
+    },
+    nightStartHour: {
+        type: DataTypes.INTEGER,
+        defaultValue: 23
+    },
+    nightEndHour: {
+        type: DataTypes.INTEGER,
+        defaultValue: 6
+    },
+    threshold: {
+        type: DataTypes.FLOAT,
+        defaultValue: 500
     },
     advanceType: {
         type: DataTypes.STRING,

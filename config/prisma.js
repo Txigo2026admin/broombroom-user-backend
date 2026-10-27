@@ -10,11 +10,16 @@ const rawConnectionString = process.env.DATABASE_URL ||
 // 1. Strip query string (e.g., ?sslmode=require) so pg doesn't override rejectUnauthorized
 const connectionString = rawConnectionString.split('?')[0];
 
-// 2. Enable SSL if connecting to any remote host or if DATABASE_URL / NODE_ENV is set
+// 2. Enable SSL only if connecting to a remote host (not 127.0.0.1 or localhost)
+const isLocal =
+    rawConnectionString.includes('127.0.0.1') ||
+    rawConnectionString.includes('localhost');
+
 const isRemote =
-    process.env.NODE_ENV === 'production' ||
-    Boolean(process.env.DATABASE_URL) ||
-    (!rawConnectionString.includes('127.0.0.1') && !rawConnectionString.includes('localhost'));
+    !isLocal &&
+    (process.env.NODE_ENV === 'production' ||
+     rawConnectionString.includes('sslmode=require') ||
+     Boolean(process.env.DATABASE_URL));
 
 const pool = new Pool({
     connectionString,

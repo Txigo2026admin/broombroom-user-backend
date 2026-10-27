@@ -1,6 +1,8 @@
 const RoutePricing = require('../models/RoutePricing');
 const StatePricing = require('../models/StatePricing');
 const RentalPackage = require('../models/RentalPackage');
+const AirportPricing = require('../models/AirportPricing');
+const Airport = require('../models/Airport');
 const City = require('../models/City');
 const CarCategory = require('../models/CarCategory');
 const GlobalSetting = require('../models/GlobalSetting');
@@ -59,6 +61,94 @@ const RENTAL_FALLBACK_TABLE = {
     }
 };
 
+// Default Airport Transfer Fallback (0-15 km base, extra kms, waiting, night allowance, threshold)
+const AIRPORT_FALLBACK_TABLE = {
+    'Sedan': { baseKms: 15, baseFare: 750, extraKmRate: 16, advanceAmount: 500, waitingChargePerHour: 150, nightAllowance: 250, threshold: 500 },
+    'Hatchback': { baseKms: 15, baseFare: 650, extraKmRate: 14, advanceAmount: 500, waitingChargePerHour: 150, nightAllowance: 200, threshold: 500 },
+    'SUV': { baseKms: 15, baseFare: 1050, extraKmRate: 20, advanceAmount: 500, waitingChargePerHour: 200, nightAllowance: 300, threshold: 500 },
+    'SUV+': { baseKms: 15, baseFare: 1350, extraKmRate: 24, advanceAmount: 500, waitingChargePerHour: 250, nightAllowance: 350, threshold: 500 },
+    '13 Seater Traveller': { baseKms: 15, baseFare: 2500, extraKmRate: 35, advanceAmount: 1000, waitingChargePerHour: 350, nightAllowance: 450, threshold: 1000 },
+    '17 Seater Traveller': { baseKms: 15, baseFare: 3000, extraKmRate: 40, advanceAmount: 1000, waitingChargePerHour: 400, nightAllowance: 500, threshold: 1000 },
+    '25 Seater Traveller': { baseKms: 15, baseFare: 3800, extraKmRate: 48, advanceAmount: 1500, waitingChargePerHour: 500, nightAllowance: 600, threshold: 1500 },
+};
+
+function isNightTime(timeStr, startHour = 23, endHour = 6) {
+    if (!timeStr) return false;
+    try {
+        const s = String(timeStr).trim().toLowerCase();
+        const isPM = s.includes('pm');
+        const isAM = s.includes('am');
+        const match = s.match(/(\d+)(?::(\d+))?/);
+        if (!match) return false;
+
+        let hour = parseInt(match[1], 10);
+        if (isPM && hour < 12) hour += 12;
+        if (isAM && hour === 12) hour = 0;
+
+        if (startHour > endHour) {
+            return hour >= startHour || hour < endHour;
+        } else {
+            return hour >= startHour && hour < endHour;
+        }
+    } catch (_) {
+        return false;
+    }
+}
+
+function parseDateTime(dateStr, timeStr) {
+    if (!dateStr) return null;
+    try {
+        let y, m, d;
+        const dClean = String(dateStr).trim();
+        if (dClean.includes('-')) {
+            const parts = dClean.split('-');
+            if (parts[0].length === 4) {
+                y = parseInt(parts[0], 10);
+                m = parseInt(parts[1], 10) - 1;
+                d = parseInt(parts[2], 10);
+            } else {
+                d = parseInt(parts[0], 10);
+                m = parseInt(parts[1], 10) - 1;
+                y = parseInt(parts[2], 10);
+            }
+        } else if (dClean.includes('/')) {
+            const parts = dClean.split('/');
+            if (parts[2].length === 4) {
+                d = parseInt(parts[0], 10);
+                m = parseInt(parts[1], 10) - 1;
+                y = parseInt(parts[2], 10);
+            } else {
+                y = parseInt(parts[0], 10);
+                m = parseInt(parts[1], 10) - 1;
+                d = parseInt(parts[2], 10);
+            }
+        }
+
+        let hour = 0, minute = 0;
+        if (timeStr) {
+            const tClean = String(timeStr).trim().toLowerCase();
+            const isPM = tClean.includes('pm');
+            const isAM = tClean.includes('am');
+            const match = tClean.match(/(\d+)(?::(\d+))?/);
+            if (match) {
+                hour = parseInt(match[1], 10);
+                minute = match[2] ? parseInt(match[2], 10) : 0;
+                if (isPM && hour < 12) hour += 12;
+                if (isAM && hour === 12) hour = 0;
+            }
+        }
+
+        if (y && m != null && d) {
+            const dt = new Date(y, m, d, hour, minute);
+            if (!isNaN(dt.getTime())) return dt;
+        }
+        const fallback = new Date(`${dateStr} ${timeStr || ''}`);
+        return isNaN(fallback.getTime()) ? null : fallback;
+    } catch (_) {
+        return null;
+    }
+}
+
 // ---------- Numeric safety helpers ----------
 // Guarantees we never end up with NaN / undefined / 0 where a real value is expected.
 function safeNumber(value, fallback = 0) {
@@ -115,6 +205,25 @@ function normalizeCarCategory(cat) {
 // ---------- Fare builder (single source of truth) ----------
 // Returns a fully-formed result ONLY when the fare is a valid positive number.
 // Returns null otherwise, so the caller can fall through to the next priority.
+
+function attachAirportNotice(result, shiftedFromAirport, distance) {
+    if (!result || !shiftedFromAirport) return result;
+    result.shiftedFromAirport = true;
+    result.redirectedToOutstation = true;
+    result.exceededAirportLimit = true;
+    result.maxAirportKms = 25;
+    result.originalRideType = 'Airport';
+    result.rideCategory = 'Oneway';
+    result.airportNotice = `Trip distance (${distance} km) exceeds the 25 km airport limit. Automatically switched to Outstation one-way pricing.`;
+    if (result.details) {
+        result.details.shiftedFromAirport = true;
+        result.details.redirectedToOutstation = true;
+        result.details.airportNotice = result.airportNotice;
+        result.details.type = `Outstation Oneway (Airport Distance > 25 km)`;
+    }
+    return result;
+}
+
 function buildFareResult({
     rawFare,
     addonTotal,
@@ -134,6 +243,8 @@ function buildFareResult({
 
     const baseFareWithMultiplier = Math.round(safeRaw * safeMultiplier);
     const finalFare = baseFareWithMultiplier + safeAddon;
+    const originalFare = Math.round(finalFare * 1.12);
+    const discountPercent = 11;
 
     // Hard guard — never emit a 0 / NaN / Infinity fare.
     if (!Number.isFinite(finalFare) || finalFare <= 0) {
@@ -145,7 +256,7 @@ function buildFareResult({
     }
 
     let advance = advanceType === 'Percentage'
-        ? Math.round(finalFare * (safeNumber(advanceValue, 0) / 100))
+        ? Math.round(finalFare * (safeNumber(advanceValue, 20) / 100))
         : Math.round(safeNumber(advanceValue, 0));
 
     advance = Math.min(Math.max(advance, 0), finalFare);
@@ -154,19 +265,33 @@ function buildFareResult({
     const resolvedDist = safeNumber(distance ?? details?.distance, 0);
     const resolvedDur = safeNumber(durationMinutes ?? details?.durationMinutes, 0);
 
+    const resolvedAdvancePct = advanceType === 'Percentage'
+        ? safeNumber(advanceValue, 20)
+        : (finalFare > 0 ? Math.round((advance / finalFare) * 100) : 0);
+
     return {
         success: true,
         fare: finalFare,
+        originalFare,
+        discountPercent,
         advance,
         dueFare,
+        advanceType: advanceType || 'Percentage',
+        advanceValue: safeNumber(advanceValue, resolvedAdvancePct),
+        advancePercentage: resolvedAdvancePct,
         distance: resolvedDist,
         durationMinutes: resolvedDur,
         details: {
             ...details,
+            originalFare,
+            discountPercent,
             distance: resolvedDist,
             durationMinutes: resolvedDur,
             addons: appliedAddons,
-            addonTotal: safeAddon
+            addonTotal: safeAddon,
+            advanceType: advanceType || 'Percentage',
+            advanceValue: safeNumber(advanceValue, resolvedAdvancePct),
+            advancePercentage: resolvedAdvancePct
         },
         multiplier: safeMultiplier,
         appliedRule,
@@ -196,6 +321,8 @@ async function calculatePrice({
     oneWayDistance,
     days = 1,
     state,
+    city,
+    airportName,
     acType = 'Any',
     seater,
     pickupDate,
@@ -206,15 +333,20 @@ async function calculatePrice({
     includedKms,
     addons = {}
 }) {
-    // 1. Global multiplier — never 0 or NaN
+    // 1. Global multiplier & Advance percentage — never 0 or NaN
     const settings = await GlobalSetting.find();
     const multiplier = safePositive(
         settings.find(s => s.key === 'globalMultiplier')?.value,
         1.0
     );
+    const globalAdvancePct = safePositive(
+        settings.find(s => s.key === 'advancePercentage')?.value,
+        20
+    );
 
     // 2. Normalize inputs
-    const normalizedRideType = normalizeRideType(rideType);
+    let normalizedRideType = normalizeRideType(rideType);
+    let shiftedFromAirport = false;
     const normalizedCarCategory = normalizeCarCategory(category);
     const resolvedDays = Math.max(1, parseInt(safeNumber(days, 1), 10) || 1);
 
@@ -226,6 +358,26 @@ async function calculatePrice({
     } else {
         resolvedDistance = Math.max(0, safeNumber(distance, 0));
     }
+
+    const returnFare = (res) => {
+        if (!res) return res;
+        if (shiftedFromAirport) {
+            res.shiftedFromAirport = true;
+            res.redirectedToOutstation = true;
+            res.exceededAirportLimit = true;
+            res.maxAirportKms = 25;
+            res.originalRideType = 'Airport';
+            res.rideCategory = 'Oneway';
+            res.airportNotice = `Trip distance (${res.distance || resolvedDistance} km) exceeds the 25 km airport limit. Automatically switched to Outstation one-way pricing.`;
+            if (res.details) {
+                res.details.shiftedFromAirport = true;
+                res.details.redirectedToOutstation = true;
+                res.details.airportNotice = res.airportNotice;
+                res.details.type = `Outstation Oneway (Airport Distance > 25 km)`;
+            }
+        }
+        return res;
+    };
 
     // 3. Resolve coordinates & driving road distance using Map API (OSRM / Nominatim)
     let pLat = pickupLat != null ? safeNumber(pickupLat, null) : null;
@@ -247,7 +399,7 @@ async function calculatePrice({
         });
 
         if (mapRouteInfo) {
-            if (mapRouteInfo.distanceKm > 0 && (resolvedDistance <= 0 || !oneWayDistance)) {
+            if (mapRouteInfo.distanceKm > 0 && resolvedDistance <= 0) {
                 // For Roundtrip, the driving road distance is doubled for the return journey
                 resolvedDistance = normalizedRideType === 'Roundtrip'
                     ? Math.round(mapRouteInfo.distanceKm * 2 * 10) / 10
@@ -286,6 +438,250 @@ async function calculatePrice({
         if (addons[key]) {
             addonTotal += safeNumber(price, 0);
             appliedAddons[key] = safeNumber(price, 0);
+        }
+    }
+
+    // ---------- Priority 1 (for Airport): Airport Transfer Pricing (City-wise, 0-15 km fixed, 15-25 km tier, >25 km outstation redirect) ----------
+    if (normalizedRideType === 'Airport') {
+        const allAirportRules = await AirportPricing.find({
+            carCategory: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\\+') + '$', 'i') },
+            status: 'Active'
+        }).sort({ updatedAt: -1, createdAt: -1 });
+
+        const allAirports = await Airport.findAll();
+        const combinedAirportText = `${sourceCity || ''} ${destinationCity || ''} ${airportName || ''} ${city || ''}`.trim();
+        const lowerAirportText = combinedAirportText.toLowerCase();
+
+        let airportObj = null;
+
+        // 1. By 3-letter IATA code (e.g. BOM, CCU, DEL, BLR, HYD, MAA, PNQ, etc.)
+        const iataMatches = combinedAirportText.match(/\b([A-Za-z]{3})\b/g);
+        if (iataMatches) {
+            for (const code of iataMatches) {
+                const found = allAirports.find(a => a.code && a.code.toUpperCase() === code.toUpperCase());
+                if (found) {
+                    airportObj = found;
+                    break;
+                }
+            }
+        }
+
+        // 2. By airport full name or code contained in the input
+        if (!airportObj) {
+            airportObj = allAirports.find(a => {
+                const aName = (a.name || '').toLowerCase();
+                const aCode = (a.code || '').toLowerCase();
+                return (aName && lowerAirportText.includes(aName)) || (aCode && lowerAirportText.includes(aCode));
+            });
+        }
+
+        // 3. By airport geographic coordinates (pickup or drop within 15 km)
+        if (!airportObj && ((pLat != null && pLng != null) || (dLat != null && dLng != null))) {
+            let closestDist = Infinity;
+            for (const a of allAirports) {
+                if (a.lat != null && a.lon != null) {
+                    const distP = (pLat != null && pLng != null) ? getHaversineDistance(pLat, pLng, a.lat, a.lon) : Infinity;
+                    const distD = (dLat != null && dLng != null) ? getHaversineDistance(dLat, dLng, a.lat, a.lon) : Infinity;
+                    const minDist = Math.min(distP, distD);
+                    if (minDist <= 15 && minDist < closestDist) {
+                        closestDist = minDist;
+                        airportObj = a;
+                    }
+                }
+            }
+        }
+
+        // 4. By airport city in the input
+        if (!airportObj) {
+            airportObj = allAirports.find(a => {
+                const aCity = (a.city || '').toLowerCase();
+                return aCity && lowerAirportText.includes(aCity);
+            });
+        }
+
+        const airportCity = airportObj ? (airportObj.city || '').trim() : (city ? String(city).trim() : null);
+        const airportState = airportObj ? (airportObj.state || '').trim() : null;
+        if (!resolvedState && airportState) {
+            resolvedState = airportState;
+        }
+
+        const locationTokens = [
+            sourceCity,
+            destinationCity,
+            airportCity,
+            airportState,
+            resolvedState
+        ].filter(Boolean).flatMap(s => s.split(',').map(p => p.trim().toLowerCase()));
+
+        let airportRule = null;
+
+        // Priority A: Exact / Specific City Match (e.g. "Mumbai", "Kolkata", "Delhi")
+        if (airportCity) {
+            const acLower = airportCity.toLowerCase();
+            airportRule = allAirportRules.find(r => {
+                const rc = (r.city || '').trim().toLowerCase();
+                return rc === acLower || rc.includes(acLower) || acLower.includes(rc);
+            });
+            if (airportRule) {
+                console.log(`[Pricing Engine] Priority 1 Match: Airport Transfer specific city '${airportRule.city}' (ID=${airportRule.id}) for ${airportCity}`);
+            }
+        }
+
+        // Priority B: City or token in pickup/drop location
+        if (!airportRule) {
+            for (const rule of allAirportRules) {
+                if (!rule.city) continue;
+                const rc = rule.city.trim().toLowerCase();
+                if (rc === 'default' || rc === 'all cities') continue;
+
+                const inSource = sourceCity && sourceCity.toLowerCase().includes(rc);
+                const inDest = destinationCity && destinationCity.toLowerCase().includes(rc);
+                const inTokens = locationTokens.some(t => t === rc || t.includes(rc) || rc.includes(t));
+
+                if (inSource || inDest || inTokens) {
+                    airportRule = rule;
+                    console.log(`[Pricing Engine] Priority 1 Match: Airport Transfer matched token city '${rule.city}' (ID=${rule.id})`);
+                    break;
+                }
+            }
+        }
+
+        // Priority C: State-level match (e.g. "Maharashtra", "West Bengal")
+        if (!airportRule && (airportState || resolvedState)) {
+            const stLower = (airportState || resolvedState).toLowerCase();
+            airportRule = allAirportRules.find(r => {
+                const rc = (r.city || '').trim().toLowerCase();
+                return rc === stLower || rc.includes(stLower) || stLower.includes(rc);
+            });
+            if (airportRule) {
+                console.log(`[Pricing Engine] Priority 1 Match: Airport Transfer state-level '${airportRule.city}' (ID=${airportRule.id}) for ${airportState || resolvedState}`);
+            }
+        }
+
+        // Priority D: Fallback to latest 'Default' / 'All Cities' rule
+        if (!airportRule) {
+            airportRule = allAirportRules.find(r => {
+                const rc = (r.city || '').trim().toLowerCase();
+                return rc === 'default' || rc === 'all cities';
+            });
+            if (airportRule) {
+                console.log(`[Pricing Engine] Priority 1 Match: Airport Transfer Default rule (ID=${airportRule.id})`);
+            }
+        }
+
+        const fallback = AIRPORT_FALLBACK_TABLE[normalizedCarCategory] || AIRPORT_FALLBACK_TABLE['Sedan'];
+
+        const baseKms = 15;
+        const maxAirportKms = safePositive(airportRule?.maxAirportKms, 25);
+        const baseFare = safePositive(airportRule?.baseFare, fallback.baseFare);
+        const fare15to25 = safePositive(airportRule?.fare15to25, fallback.fare15to25 || 1050);
+        const extraKmRate = safePositive(airportRule?.extraKmRate, fallback.extraKmRate);
+        const waitingCharge = safeNumber(airportRule?.waitingChargePerHour, fallback.waitingChargePerHour);
+        const nightAllowance = safeNumber(airportRule?.nightAllowance, fallback.nightAllowance);
+        const threshold = safeNumber(airportRule?.threshold, fallback.threshold);
+        const advanceType = airportRule?.advanceType || 'Percentage';
+        const advanceValue = safePositive(airportRule?.advanceValue, (airportRule?.advanceAmount || globalAdvancePct || 20));
+        const advanceAmount = advanceType === 'Percentage'
+            ? Math.round(calculatedBaseFare * (advanceValue / 100))
+            : safePositive(airportRule?.advanceAmount, fallback.advanceAmount);
+
+        const currentDistance = resolvedDistance > 0 ? resolvedDistance : baseKms;
+
+        // Condition 3: Distance exceeds 25 km limit -> Cannot book directly as Airport transfer; shift to Outstation Oneway pricing
+        if (currentDistance > maxAirportKms) {
+            console.log(
+                `[Pricing Engine] Airport transfer distance (${currentDistance} km) exceeds maximum ${maxAirportKms} km range. ` +
+                `Switching directly to Outstation (Oneway) pricing as per airport policy.`
+            );
+            normalizedRideType = 'Oneway';
+            shiftedFromAirport = true;
+            // Falls through to RoutePricing and StatePricing for Oneway
+        } else {
+            // Distance is within 0 - 25 km limit
+            // Condition 1: 0 - 15 km fixed charge set by admin
+            // Condition 2: 15 - 25 km tier fixed charge set by admin
+            const isTier1 = currentDistance <= baseKms;
+            const activeTier = isTier1 ? '0-15 km' : '15-25 km';
+            const activeFare = isTier1 ? baseFare : fare15to25;
+
+            let calculatedBaseFare = activeFare;
+
+            // Night driving allowance: Applicable once if ride time falls between 11 pm till 6 am
+            const isNight = isNightTime(pickupTime, airportRule?.nightStartHour ?? 23, airportRule?.nightEndHour ?? 6);
+            if (isNight) {
+                calculatedBaseFare += nightAllowance;
+            }
+
+            const ruleCityName = airportRule?.city || airportCity || 'Default';
+
+            console.log(
+                `[Pricing Engine] Priority 1 Match: Airport Transfer (${ruleCityName}, ` +
+                `${normalizedCarCategory}, Dist=${currentDistance}km, Tier=${activeTier}, BaseFare=₹${activeFare}, ` +
+                `Night=+₹${isNight ? nightAllowance : 0}, Total=₹${calculatedBaseFare}, Advance=₹${advanceAmount}, Threshold=₹${threshold})`
+            );
+
+            const details = {
+                type: `Airport Transfer (${ruleCityName})`,
+                city: ruleCityName,
+                airportCity: airportCity || ruleCityName,
+                airportName: airportObj?.name || 'Airport',
+                carCategory: normalizedCarCategory,
+                tier: activeTier,
+                baseFare: activeFare,
+                fare0to15: baseFare,
+                fare15to25: fare15to25,
+                baseKms,
+                maxAirportKms,
+                distance: currentDistance,
+                durationMinutes: mapRouteInfo?.durationMinutes,
+                extraKms: isTier1 ? 0 : Math.round((currentDistance - baseKms) * 10) / 10,
+                extraKmRate,
+                waitingCharge,
+                waitingChargePerHour: waitingCharge,
+                waitingFreeMins: airportRule?.waitingFreeMins || 60,
+                nightAllowance,
+                isNightApplicable: isNight,
+                nightWindow: '11 pm till 6 am',
+                threshold,
+                advanceAmount,
+                advance: advanceAmount,
+                inclusions: [
+                    `Fixed Airport Transfer Charges (${activeTier})`,
+                    'Driver Allowance',
+                    'Airport Assistance'
+                ],
+                exclusions: [
+                    'Toll / State Tax',
+                    'Parking Charges (as per actuals)',
+                    'GST (5%)',
+                    `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
+                    `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`
+                ],
+                termsAndConditions: [
+                    `0-${baseKms} km: fixed charges of ₹${baseFare}`,
+                    `15-${maxAirportKms} km: fixed charges of ₹${fare15to25}`,
+                    `Beyond ${maxAirportKms} km: Airport flat transfer not applicable. Redirected to Outstation one-way rates.`,
+                    `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
+                    `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`,
+                    `Threshold value: ₹${threshold} to confirm booking`
+                ]
+            };
+
+            const result = buildFareResult({
+                rawFare: calculatedBaseFare,
+                addonTotal,
+                appliedAddons,
+                multiplier,
+                details,
+                advanceType,
+                advanceValue,
+                appliedRule: airportRule?.id || airportRule?._id || `airport-${normalizedCarCategory}`,
+                ruleType: 'AirportPricing',
+                distance: currentDistance,
+                durationMinutes: mapRouteInfo?.durationMinutes
+            });
+
+            if (result) return result;
         }
     }
 
@@ -361,19 +757,19 @@ async function calculatePrice({
             appliedAddons,
             multiplier,
             details: { ...details, distance: resolvedDistance, durationMinutes: mapRouteInfo?.durationMinutes },
-            advanceType: routeRule.advanceType,
-            advanceValue: routeRule.advanceValue,
+            advanceType: routeRule.advanceType || 'Percentage',
+            advanceValue: safePositive(routeRule.advanceValue, (routeRule.advanceAmount || globalAdvancePct || 20)),
             appliedRule: routeRule._id,
             ruleType: 'RouteSpecific',
             distance: resolvedDistance,
             durationMinutes: mapRouteInfo?.durationMinutes
         });
 
-        if (result) return result;
+        if (result) return returnFare(result);
         // else fall through to Priority 2
     }
 
-    // ---------- Priority 2A: Rental Package Pricing ----------
+    
     if (normalizedRideType === 'Rental') {
         const pkgHours = packageHours ? parseInt(safeNumber(packageHours, 8), 10) || 8 : 8;
         const pkgKms = includedKms ? parseInt(safeNumber(includedKms, 80), 10) || 80 : 80;
@@ -461,226 +857,485 @@ async function calculatePrice({
                 durationMinutes: rentalDuration
             });
 
-            if (result) return result;
+            if (result) return returnFare(result);
         }
     }
 
-    // ---------- Priority 2B: State‑wise General Pricing ----------
-    if (resolvedState) {
-        const stateQuery = {
-            state: { $regex: new RegExp('^' + resolvedState.trim() + '$', 'i') },
-            rideCategory: normalizedRideType,
-            carCategory: normalizedCarCategory,
-            status: 'Active'
-        };
+    // ---------- Priority 2B: State / City‑wise Outstation Pricing ----------
+    let stateRule = null;
+    let matchType = '';
 
-        const stateRules = await StatePricing.find(stateQuery);
+    const cleanPickupCity = (city || sourceCity || '').trim();
+    const cityTokens = cleanPickupCity.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 
-        // Filter by seater / acType if provided
-        const stateRule = stateRules.find(r =>
+    // Fetch all active rules for this rideCategory and carCategory
+    const candidateRules = await StatePricing.find({
+        rideCategory: { $regex: new RegExp('^' + normalizedRideType + '$', 'i') },
+        carCategory: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\+') + '$', 'i') },
+        status: 'Active'
+    }).sort({ updatedAt: -1, createdAt: -1 });
+
+    const filterSeaterAc = (rules) => {
+        return rules.find(r =>
             (seater == null || r.seater === parseInt(seater, 10)) &&
             (acType === 'Any' || r.acType === 'Any' || r.acType === acType)
-        ) || stateRules[0];
+        ) || rules[0];
+    };
 
-        if (stateRule) {
-            console.log(`[Pricing Engine] Priority 2 Match: StatePricing ID=${stateRule._id}`);
+    // 1. City Match (e.g. Kolkata, Mumbai, Delhi)
+    if (cityTokens.length > 0) {
+        const cityMatches = candidateRules.filter(r => {
+            if (!r.city) return false;
+            const rc = r.city.trim().toLowerCase();
+            if (rc === 'default' || rc === 'all cities') return false;
+            return cityTokens.some(tok => tok === rc || tok.includes(rc) || rc.includes(tok));
+        });
+        if (cityMatches.length > 0) {
+            stateRule = filterSeaterAc(cityMatches);
+            matchType = `City (${stateRule.city})`;
+        }
+    }
 
-            const ratePerKm = safeNumber(stateRule.ratePerKm, 0);
-            const minKms = safeNumber(stateRule.minKms, 0);
-            const driverBata = safeNumber(stateRule.driverBata, 0);
-            const nightAllowance = safeNumber(stateRule.nightAllowance, 0);
-            const toll = safeNumber(stateRule.toll, 0);
-            const parking = safeNumber(stateRule.parking, 0);
-            const permit = safeNumber(stateRule.permit, 0);
-            const stateTax = safeNumber(stateRule.stateTax, 0);
-            const airportEntry = safeNumber(stateRule.airportEntry, 0);
-            const waitingCharge = safeNumber(stateRule.waitingCharge, 0);
-            const otherCharges = safeNumber(stateRule.otherCharges, 0);
-            const hourlyRate = safeNumber(stateRule.hourlyRate, 0);
+    // 2. State Match (e.g. West Bengal, Maharashtra)
+    if (!stateRule && resolvedState) {
+        const stLower = resolvedState.trim().toLowerCase();
+        const stateMatches = candidateRules.filter(r => {
+            if (!r.state) return false;
+            const rs = r.state.trim().toLowerCase();
+            if (rs === 'default' || rs === 'all cities') return false;
+            return rs === stLower || rs.includes(stLower) || stLower.includes(rs);
+        });
+        if (stateMatches.length > 0) {
+            stateRule = filterSeaterAc(stateMatches);
+            matchType = `State (${stateRule.state})`;
+        }
+    }
 
-            let baseFareTotal = 0;
-            const details = {
-                type: `State-wise General Pricing (${resolvedState})`,
-                ratePerKm,
-                minKms,
+    // 3. Default Outstation Match
+    if (!stateRule) {
+        const defaultMatches = candidateRules.filter(r => {
+            const rc = (r.city || '').trim().toLowerCase();
+            const rs = (r.state || '').trim().toLowerCase();
+            return rc === 'default' || rs === 'default';
+        });
+        if (defaultMatches.length > 0) {
+            stateRule = filterSeaterAc(defaultMatches);
+            matchType = `Default (${stateRule.carCategory})`;
+        }
+    }
+
+    if (stateRule) {
+        console.log(`[Pricing Engine] Priority 2 Match: StatePricing ID=${stateRule._id || stateRule.id} [${matchType}]`);
+
+        const ratePerKm = safeNumber(stateRule.ratePerKm, 0);
+        const extraKmRate = safePositive(stateRule.extraKmRate, ratePerKm);
+        const minKms = safeNumber(stateRule.minKms, 0);
+        const driverBata = safeNumber(stateRule.driverBata, 0);
+        const nightAllowance = safeNumber(stateRule.nightAllowance, 0);
+        const toll = safeNumber(stateRule.toll, 0);
+        const parking = safeNumber(stateRule.parking, 0);
+        const permit = safeNumber(stateRule.permit, 0);
+        const stateTax = safeNumber(stateRule.stateTax, 0);
+        const airportEntry = safeNumber(stateRule.airportEntry, 0);
+        const waitingCharge = safeNumber(stateRule.waitingCharge, 0);
+        const otherCharges = safeNumber(stateRule.otherCharges, 0);
+        const hourlyRate = safeNumber(stateRule.hourlyRate, 0);
+        const threshold = safeNumber(stateRule.threshold, 500);
+        const waitingChargePerHour = safePositive(stateRule.waitingChargePerHour, safePositive(stateRule.waitingCharge, 150));
+        const waitingFreeMins = safeNumber(stateRule.waitingFreeMins, 60);
+
+        let baseFareTotal = 0;
+        const details = {
+            type: `Outstation Pricing [${matchType}]`,
+            city: stateRule.city || cleanPickupCity || 'Default',
+            state: stateRule.state || resolvedState || 'Default',
+            ratePerKm,
+            extraKmRate,
+            minKms,
+            driverBata,
+            nightAllowance,
+            waitingChargePerHour,
+            waitingFreeMins,
+            threshold,
+            extraHourRate: safeNumber(stateRule.extraHourRate, 0),
+            waitingCharge,
+            toll,
+            parking,
+            permit,
+            stateTax,
+            airportEntry,
+            otherCharges
+        };
+
+        if (normalizedRideType === 'Oneway') {
+            // Outstation OneWay Slabs:
+            // 0 to 50 km -> Billable 50 km
+            // 51 to 100 km -> Billable 100 km
+            // 101 to 150 km -> Billable 150 km
+            // 151 to 200 km (Upto 200 kms) -> Billable 200 km
+            // > 200 km (Upto 4000 kms) -> Base 200 km + Extra kms @ extraKmRate
+            let slab = '0-50 km';
+            let billableKms = 50;
+            let extraKms = 0;
+            let extraKmCharges = 0;
+            let distanceFare = 0;
+
+            if (resolvedDistance <= 50) {
+                slab = '0-50 km';
+                billableKms = 50;
+                distanceFare = billableKms * ratePerKm;
+            } else if (resolvedDistance <= 100) {
+                slab = '51-100 km';
+                billableKms = 100;
+                distanceFare = billableKms * ratePerKm;
+            } else if (resolvedDistance <= 150) {
+                slab = '101-150 km';
+                billableKms = 150;
+                distanceFare = billableKms * ratePerKm;
+            } else if (resolvedDistance <= 200) {
+                slab = '151-200 km';
+                billableKms = 200;
+                distanceFare = billableKms * ratePerKm;
+            } else {
+                slab = 'Upto 4000 km';
+                billableKms = resolvedDistance;
+                extraKms = 0;
+                extraKmCharges = 0;
+                distanceFare = resolvedDistance * ratePerKm;
+            }
+
+            // Decimal rates (e.g. 10.2) supported, price calculated round
+            distanceFare = Math.round(distanceFare);
+
+            // Night driving allowances: Rs (Applicable once if ride time falls between 11 pm till 6 am)
+            const isNight = isNightTime(pickupTime, stateRule.nightStartHour ?? 23, stateRule.nightEndHour ?? 6);
+            const appliedNightAllowance = isNight ? nightAllowance : 0;
+
+            const calculatedTotal = Math.round(
+                distanceFare + driverBata + appliedNightAllowance + toll + parking +
+                permit + stateTax + airportEntry + otherCharges
+            );
+
+            // Threshold comparison: 'which value is more will show in price now set threshold value 500'
+            baseFareTotal = Math.max(calculatedTotal, Math.round(threshold));
+
+            Object.assign(details, {
+                slab,
+                billableKms,
+                actualDistance: resolvedDistance,
+                extraKms,
+                extraKmCharges,
+                distanceFare,
                 driverBata,
-                nightAllowance,
-                extraKmRate: safeNumber(stateRule.extraKmRate, 0),
-                extraHourRate: safeNumber(stateRule.extraHourRate, 0),
-                waitingCharge,
+                nightAllowance: appliedNightAllowance,
+                isNight,
+                rawCalculatedTotal: calculatedTotal,
+                threshold,
+                isThresholdApplied: calculatedTotal < threshold,
                 toll,
                 parking,
                 permit,
                 stateTax,
                 airportEntry,
+                waitingCharge,
                 otherCharges
-            };
+            });
+        }
+        else if (normalizedRideType === 'Roundtrip') {
+            // Roundtrip Slabs (0-50 km, 51-100 km, 101-150 km, 151-200 km, 200-4000 km)
+            // Distance fare = actual roundtrip distance * ratePerKm (beyond 200 km: 200*rate + extra*extraKmRate)
+            let slab = '0-50 km';
+            let extraKms = 0;
+            let extraKmCharges = 0;
+            let distanceFare = 0;
 
-            if (normalizedRideType === 'Oneway') {
-                const billableKms = Math.max(resolvedDistance, minKms);
-                const distanceFare = billableKms * ratePerKm;
-
-                let night = 0;
-                if (pickupTime) {
-                    const hour = parseInt(String(pickupTime).split(':')[0], 10);
-                    if (!isNaN(hour) && (hour >= 22 || hour < 6)) night = nightAllowance;
-                }
-
-                baseFareTotal = distanceFare + driverBata + night + toll + parking +
-                    permit + stateTax + airportEntry + waitingCharge + otherCharges;
-
-                Object.assign(details, {
-                    billableKms,
-                    distanceFare,
-                    driverBata,
-                    nightAllowance: night,
-                    toll,
-                    parking,
-                    permit,
-                    stateTax,
-                    airportEntry,
-                    waitingCharge,
-                    otherCharges
-                });
+            if (resolvedDistance <= 50) {
+                slab = '0-50 km';
+                distanceFare = resolvedDistance * ratePerKm;
+            } else if (resolvedDistance <= 100) {
+                slab = '51-100 km';
+                distanceFare = resolvedDistance * ratePerKm;
+            } else if (resolvedDistance <= 150) {
+                slab = '101-150 km';
+                distanceFare = resolvedDistance * ratePerKm;
+            } else if (resolvedDistance <= 200) {
+                slab = '151-200 km';
+                distanceFare = resolvedDistance * ratePerKm;
+            } else {
+                slab = 'Upto 4000 km';
+                extraKms = 0;
+                extraKmCharges = 0;
+                distanceFare = resolvedDistance * ratePerKm;
             }
-            else if (normalizedRideType === 'Roundtrip') {
-                const rtDays = Math.max(resolvedDays, 1);
-                const minKmsTotal = minKms * rtDays;
-                const billableKms = Math.max(resolvedDistance, minKmsTotal);
-                const distanceFare = billableKms * ratePerKm;
 
-                let totalHours = 24 * rtDays;
-                if (pickupDate && pickupTime && returnDate && returnTime) {
-                    const pickup = new Date(`${pickupDate} ${pickupTime}`);
-                    const returnDt = new Date(`${returnDate} ${returnTime}`);
-                    if (!isNaN(pickup.getTime()) && !isNaN(returnDt.getTime())) {
-                        const diffMs = returnDt - pickup;
-                        if (diffMs > 0) totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
-                    }
-                }
+            distanceFare = Math.round(distanceFare);
 
-                const hourlyFare = totalHours * hourlyRate;
-                const baseFare = Math.max(distanceFare, hourlyFare);
+            // Value 2: Total Hours and Hourly Charges between trip start and end
+            let totalHours = 0;
+            const startDt = parseDateTime(pickupDate, pickupTime);
+            const endDt = parseDateTime(returnDate, returnTime);
 
-                const totalDriverBata = driverBata * rtDays;
-                const totalNight = nightAllowance * rtDays;
+            if (startDt && endDt && endDt > startDt) {
+                const diffMs = endDt - startDt;
+                totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+            } else {
+                const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
+                totalHours = rtDays > 1 ? rtDays * 24 : 4;
+            }
 
-                baseFareTotal = baseFare + totalDriverBata + totalNight + toll + parking +
-                    permit + stateTax + airportEntry + waitingCharge + otherCharges;
+            const activeHourlyRate = safePositive(stateRule.hourlyRate, 100);
+            const hourlyFare = Math.round(totalHours * activeHourlyRate);
 
-                Object.assign(details, {
-                    rtDays,
-                    totalHours,
-                    billableKms,
-                    minKmsTotal,
-                    distance: resolvedDistance,
-                    oneWayDistance: mapRouteInfo?.distanceKm || Math.round((resolvedDistance / 2) * 10) / 10,
+            // Value 3: Admin Set Threshold Value for this city / car category (e.g. 1000)
+            const activeThreshold = safePositive(stateRule.threshold, 1000);
+
+            // Compare those three values: whichever is more will show for the car
+            // 1. Distance fare (e.g. 30 * 15 = 450)
+            // 2. Hourly fare (e.g. 4 * 100 = 400)
+            // 3. Threshold value (e.g. 1000)
+            const chosenBaseFare = Math.max(distanceFare, hourlyFare, activeThreshold);
+
+            // Night driving allowance if applicable (11 PM - 6 AM)
+            const isNight = isNightTime(pickupTime, stateRule.nightStartHour ?? 23, stateRule.nightEndHour ?? 6);
+            const appliedNightAllowance = isNight ? nightAllowance : 0;
+
+            baseFareTotal = Math.round(chosenBaseFare + appliedNightAllowance + toll + parking + permit + stateTax + airportEntry + otherCharges);
+
+            const oneWayDist = oneWayDistance != null && safeNumber(oneWayDistance, 0) > 0
+                ? safeNumber(oneWayDistance, 0)
+                : Math.round((resolvedDistance / 2) * 10) / 10;
+
+            Object.assign(details, {
+                slab,
+                actualDistance: resolvedDistance,
+                oneWayDistance: oneWayDist,
+                distanceFare,
+                ratePerKm,
+                extraKmRate,
+                extraKms,
+                extraKmCharges,
+                totalHours,
+                hourlyRate: activeHourlyRate,
+                hourlyFare,
+                threshold: activeThreshold,
+                chosenBaseFare,
+                comparison: {
                     distanceFare,
                     hourlyFare,
-                    baseFareChosen: baseFare,
-                    driverBata: totalDriverBata,
-                    nightAllowance: totalNight,
-                    toll,
-                    parking,
-                    permit,
-                    stateTax,
-                    airportEntry,
-                    waitingCharge,
-                    otherCharges
-                });
-            }
-            else {
-                // Airport, Station, or any other fallback
-                const billableKms = Math.max(resolvedDistance, minKms);
-                const distanceFare = billableKms * ratePerKm;
-
-                let night = 0;
-                if (pickupTime) {
-                    const hour = parseInt(String(pickupTime).split(':')[0], 10);
-                    if (!isNaN(hour) && (hour >= 22 || hour < 6)) night = nightAllowance;
-                }
-
-                baseFareTotal = distanceFare + driverBata + night + toll + parking +
-                    permit + stateTax + airportEntry + waitingCharge + otherCharges;
-
-                Object.assign(details, {
-                    billableKms,
-                    distanceFare,
-                    driverBata,
-                    nightAllowance: night,
-                    toll,
-                    parking,
-                    permit,
-                    stateTax,
-                    airportEntry,
-                    waitingCharge,
-                    otherCharges
-                });
-            }
-
-            const result = buildFareResult({
-                rawFare: baseFareTotal,
-                addonTotal,
-                appliedAddons,
-                multiplier,
-                details: { ...details, distance: resolvedDistance, durationMinutes: mapRouteInfo?.durationMinutes },
-                advanceType: stateRule.advanceType,
-                advanceValue: stateRule.advanceValue,
-                appliedRule: stateRule._id,
-                ruleType: 'StateGeneral',
-                distance: resolvedDistance,
-                durationMinutes: mapRouteInfo?.durationMinutes
+                    threshold: activeThreshold,
+                    selected: chosenBaseFare === distanceFare ? 'distanceFare' : (chosenBaseFare === hourlyFare ? 'hourlyFare' : 'threshold')
+                },
+                driverBata,
+                nightAllowance: appliedNightAllowance,
+                isNight,
+                rawCalculatedTotal: baseFareTotal,
+                isThresholdApplied: chosenBaseFare === activeThreshold,
+                toll,
+                parking,
+                permit,
+                stateTax,
+                airportEntry,
+                waitingChargePerHour,
+                waitingFreeMins,
+                otherCharges
             });
-
-            if (result) return result;
-            // else fall through to Priority 3
         }
+        else {
+            const billableKms = Math.max(resolvedDistance, minKms);
+            const distanceFare = Math.round(billableKms * ratePerKm);
+
+            const isNight = isNightTime(pickupTime, stateRule.nightStartHour ?? 23, stateRule.nightEndHour ?? 6);
+            const appliedNightAllowance = isNight ? nightAllowance : 0;
+
+            const calculatedTotal = Math.round(
+                distanceFare + driverBata + appliedNightAllowance + toll + parking +
+                permit + stateTax + airportEntry + otherCharges
+            );
+
+            baseFareTotal = Math.max(calculatedTotal, Math.round(threshold));
+
+            Object.assign(details, {
+                billableKms,
+                distanceFare,
+                driverBata,
+                nightAllowance: appliedNightAllowance,
+                isNight,
+                rawCalculatedTotal: calculatedTotal,
+                threshold,
+                isThresholdApplied: calculatedTotal < threshold,
+                toll,
+                parking,
+                permit,
+                stateTax,
+                airportEntry,
+                waitingCharge,
+                otherCharges
+            });
+        }
+
+        const result = buildFareResult({
+            rawFare: baseFareTotal,
+            addonTotal,
+            appliedAddons,
+            multiplier,
+            details: { ...details, distance: resolvedDistance, durationMinutes: mapRouteInfo?.durationMinutes },
+            advanceType: stateRule.advanceType || 'Percentage',
+            advanceValue: safePositive(stateRule.advanceValue, (stateRule.advanceAmount || globalAdvancePct || 20)),
+            appliedRule: stateRule._id || stateRule.id,
+            ruleType: 'StateGeneral',
+            distance: resolvedDistance,
+            durationMinutes: mapRouteInfo?.durationMinutes
+        });
+
+        if (result) return returnFare(result);
     }
 
     // ---------- Priority 3: Fallback (Standard CarCategory Rate) ----------
     console.log(`[Pricing Engine] Priority 3 Match: Standard Category Fallback (${normalizedCarCategory})`);
 
     let carCat = await CarCategory.findOne({
-        name: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\\+') + '$', 'i') }
+        name: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\+') + '$', 'i') }
     });
 
     if (!carCat) {
         carCat = await CarCategory.findOne({
-            displayName: { $regex: new RegExp(normalizedCarCategory.replace('+', '\\+'), 'i') }
+            displayName: { $regex: new RegExp(normalizedCarCategory.replace('+', '\+'), 'i') }
         });
     }
 
     const defaultRates = {
-        'Sedan': { perKmRate: 15, seater: 4, driverBata: 250, nightAllowance: 250 },
-        'SUV': { perKmRate: 20, seater: 6, driverBata: 300, nightAllowance: 300 },
-        'SUV+': { perKmRate: 25, seater: 7, driverBata: 350, nightAllowance: 350 },
-        '13 Seater Traveller': { perKmRate: 40, seater: 13, driverBata: 450, nightAllowance: 450 },
-        '17 Seater Traveller': { perKmRate: 45, seater: 17, driverBata: 500, nightAllowance: 500 },
-        '25 Seater Traveller': { perKmRate: 50, seater: 25, driverBata: 600, nightAllowance: 600 },
-        'Hatchback': { perKmRate: 15, seater: 4, driverBata: 200, nightAllowance: 200 }
+        'Sedan': { perKmRate: 10.2, extraKmRate: 12, seater: 4, driverBata: 0, nightAllowance: 250, threshold: 500 },
+        'Hatchback': { perKmRate: 9.5, extraKmRate: 11, seater: 4, driverBata: 0, nightAllowance: 200, threshold: 500 },
+        'SUV': { perKmRate: 14.5, extraKmRate: 16, seater: 6, driverBata: 0, nightAllowance: 300, threshold: 700 },
+        'SUV+': { perKmRate: 18.0, extraKmRate: 20, seater: 7, driverBata: 0, nightAllowance: 350, threshold: 800 },
+        '13 Seater Traveller': { perKmRate: 28.0, extraKmRate: 30, seater: 13, driverBata: 0, nightAllowance: 450, threshold: 1200 },
+        '17 Seater Traveller': { perKmRate: 34.0, extraKmRate: 36, seater: 17, driverBata: 0, nightAllowance: 500, threshold: 1500 },
+        '25 Seater Traveller': { perKmRate: 42.0, extraKmRate: 45, seater: 25, driverBata: 0, nightAllowance: 600, threshold: 2000 }
     };
 
     const def = defaultRates[normalizedCarCategory] || defaultRates['Sedan'];
     const perKmRate = safePositive(carCat ? carCat.perKmRate : def.perKmRate, def.perKmRate);
-    const minKms = 100;
-    const billableKms = Math.max(resolvedDistance, minKms);
-    const driverBata = (carCat ? carCat.seater : def.seater) > 4 ? def.driverBata : 250;
+    const extraKmRate = def.extraKmRate || perKmRate;
+    const threshold = def.threshold || 500;
+    const waitingChargePerHour = 150;
+    const waitingFreeMins = 60;
+    const driverBata = def.driverBata || 0;
 
-    let baseFareTotal = (billableKms * perKmRate) + driverBata;
+    let baseFareTotal = 0;
+    let slab = '0-50 km';
+    let billableKms = 50;
+    let extraKms = 0;
+    let extraKmCharges = 0;
+    let distanceFare = 0;
 
-    if (normalizedRideType === 'Roundtrip') {
-        const rtDays = Math.max(resolvedDays, 1);
-        const minRtKms = Math.max(resolvedDistance, 250 * rtDays);
-        baseFareTotal = (minRtKms * perKmRate) + (driverBata * rtDays);
+    if (normalizedRideType === 'Oneway') {
+        if (resolvedDistance <= 50) {
+            slab = '0-50 km';
+            billableKms = 50;
+            distanceFare = billableKms * perKmRate;
+        } else if (resolvedDistance <= 100) {
+            slab = '51-100 km';
+            billableKms = 100;
+            distanceFare = billableKms * perKmRate;
+        } else if (resolvedDistance <= 150) {
+            slab = '101-150 km';
+            billableKms = 150;
+            distanceFare = billableKms * perKmRate;
+        } else if (resolvedDistance <= 200) {
+            slab = '151-200 km';
+            billableKms = 200;
+            distanceFare = billableKms * perKmRate;
+        } else {
+            slab = 'Upto 4000 km';
+            billableKms = resolvedDistance;
+            extraKms = 0;
+            extraKmCharges = 0;
+            distanceFare = resolvedDistance * perKmRate;
+        }
+
+        distanceFare = Math.round(distanceFare);
+
+        const isNight = isNightTime(pickupTime, 23, 6);
+        const nightAllowance = isNight ? def.nightAllowance : 0;
+
+        const calculatedTotal = Math.round(distanceFare + driverBata + nightAllowance);
+        baseFareTotal = Math.max(calculatedTotal, threshold);
+    } else if (normalizedRideType === 'Roundtrip') {
+        let slab = '0-50 km';
+        let extraKms = 0;
+        let extraKmCharges = 0;
+        let distanceFare = 0;
+
+        if (resolvedDistance <= 50) {
+            slab = '0-50 km';
+            distanceFare = resolvedDistance * perKmRate;
+        } else if (resolvedDistance <= 100) {
+            slab = '51-100 km';
+            distanceFare = resolvedDistance * perKmRate;
+        } else if (resolvedDistance <= 150) {
+            slab = '101-150 km';
+            distanceFare = resolvedDistance * perKmRate;
+        } else if (resolvedDistance <= 200) {
+            slab = '151-200 km';
+            distanceFare = resolvedDistance * perKmRate;
+        } else {
+            slab = 'Upto 4000 km';
+            extraKms = 0;
+            extraKmCharges = 0;
+            distanceFare = resolvedDistance * perKmRate;
+        }
+
+        distanceFare = Math.round(distanceFare);
+
+        let totalHours = 0;
+        const startDt = parseDateTime(pickupDate, pickupTime);
+        const endDt = parseDateTime(returnDate, returnTime);
+        if (startDt && endDt && endDt > startDt) {
+            const diffMs = endDt - startDt;
+            totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+        } else {
+            const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
+            totalHours = rtDays > 1 ? rtDays * 24 : 4;
+        }
+
+        const activeHourlyRate = 100;
+        const hourlyFare = Math.round(totalHours * activeHourlyRate);
+        const activeThreshold = 1000;
+
+        const chosenBaseFare = Math.max(distanceFare, hourlyFare, activeThreshold);
+        baseFareTotal = chosenBaseFare;
+        billableKms = resolvedDistance;
+
+        Object.assign(details, {
+            slab,
+            distanceFare,
+            totalHours,
+            hourlyRate: activeHourlyRate,
+            hourlyFare,
+            threshold: activeThreshold,
+            chosenBaseFare
+        });
+    } else {
+        billableKms = Math.max(resolvedDistance, 50);
+        distanceFare = Math.round(billableKms * perKmRate);
+        baseFareTotal = Math.max(distanceFare + driverBata, threshold);
     }
 
     const details = {
         type: `Standard Rate (${carCat ? carCat.displayName : normalizedCarCategory})`,
         ratePerKm: perKmRate,
-        minKms,
+        extraKmRate,
+        slab,
+        minKms: billableKms,
         billableKms,
-        distanceFare: billableKms * perKmRate,
+        extraKms,
+        extraKmCharges,
+        distanceFare,
         driverBata,
+        threshold,
+        waitingChargePerHour,
+        waitingFreeMins,
+        nightAllowance: def.nightAllowance,
         distance: resolvedDistance,
         durationMinutes: mapRouteInfo?.durationMinutes
     };
@@ -692,7 +1347,7 @@ async function calculatePrice({
         multiplier,
         details,
         advanceType: 'Percentage',
-        advanceValue: 20,
+        advanceValue: globalAdvancePct || 20,
         appliedRule: carCat ? carCat.id : 'standard-category-rate',
         ruleType: 'CategoryFallback',
         distance: resolvedDistance,
@@ -700,7 +1355,7 @@ async function calculatePrice({
     });
 
     if (fallbackResult) {
-        return fallbackResult;
+        return returnFare(fallbackResult);
     }
 
     return { ...UNAVAILABLE };
