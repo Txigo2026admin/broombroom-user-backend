@@ -47,6 +47,16 @@ const connectDB = async () => {
         if (models.AirportPricing) {
             await models.AirportPricing.sync({ alter: true }).catch(() => {});
         }
+        if (models.StatePricing) {
+            await models.StatePricing.sync({ alter: true }).catch((err) => {
+                console.warn('[DB] StatePricing sync notice:', err.message);
+            });
+        }
+        // Raw safeguard: ensure "city" and "threshold" columns exist on hosted database (Vercel/Neon/Supabase)
+        await sequelize.query(`
+            ALTER TABLE state_pricings ADD COLUMN IF NOT EXISTS "city" VARCHAR(255);
+            ALTER TABLE state_pricings ADD COLUMN IF NOT EXISTS "threshold" FLOAT DEFAULT 500;
+        `).catch(() => {});
         isConnected = true;
         console.log('PostgreSQL connected successfully');
     } catch (error) {

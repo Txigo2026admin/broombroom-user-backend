@@ -1,3 +1,4 @@
+const { Op } = require('sequelize');
 const Booking = require('../models/Booking');
 
 // @desc    Get all bookings
@@ -16,6 +17,52 @@ exports.getBookings = async (req, res) => {
 exports.createBooking = async (req, res) => {
     try {
         const booking = await Booking.create(req.body);
+
+        // Auto-sync customer as a User Lead in `users` table
+        if (req.body.customerMobile) {
+            try {
+                const User = require('../models/User');
+                const rawPhone = String(req.body.customerMobile).trim();
+                const digits = rawPhone.replace(/\D/g, '');
+                const tenDigitPhone = digits.length >= 10 ? digits.slice(-10) : digits;
+                const rawEmail = req.body.customerEmail ? String(req.body.customerEmail).trim().toLowerCase() : null;
+                const rawName = req.body.customerName ? String(req.body.customerName).trim() : '';
+
+                const phoneVariants = [
+                    rawPhone,
+                    tenDigitPhone,
+                    tenDigitPhone ? `+91${tenDigitPhone}` : null,
+                    tenDigitPhone ? `+91 ${tenDigitPhone}` : null
+                ].filter(Boolean);
+
+                const orConditions = [{ phone: { [Op.in]: phoneVariants } }];
+                if (rawEmail && rawEmail.length > 3) {
+                    orConditions.push({ email: rawEmail });
+                }
+
+                let existingUser = await User.findOne({ where: { [Op.or]: orConditions } });
+                if (existingUser) {
+                    await existingUser.update({
+                        updatedAt: new Date(),
+                        loginCount: (existingUser.loginCount || 1) + 1,
+                        name: rawName && (!existingUser.name || existingUser.name === 'New User' || existingUser.name.startsWith('User ')) ? rawName : existingUser.name
+                    });
+                } else {
+                    await User.create({
+                        name: rawName || `User ${tenDigitPhone ? tenDigitPhone.slice(-4) : 'Guest'}`,
+                        phone: tenDigitPhone || rawPhone,
+                        email: rawEmail || null,
+                        status: 'Active',
+                        loginCount: 1,
+                        leadType: 'New',
+                        registeredAt: new Date()
+                    });
+                }
+            } catch (syncErr) {
+                console.warn('Booking lead auto-sync notice:', syncErr.message);
+            }
+        }
+
         res.status(201).json(booking);
     } catch (error) {
         res.status(400).json({ message: error.message });
@@ -37,7 +84,6 @@ exports.updateBookingStatus = async (req, res) => {
         res.status(400).json({ message: error.message });
     }
 };
-
 
 // @desc    Calculate estimated fare
 // @route   POST /api/bookings/calculate-fare
@@ -98,4 +144,3 @@ exports.calculateFare = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
-
