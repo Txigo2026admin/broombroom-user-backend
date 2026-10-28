@@ -320,6 +320,9 @@ async function calculatePrice({
     distance,
     oneWayDistance,
     days = 1,
+    bookingDuration,
+    durationHours,
+    hours,
     state,
     city,
     airportName,
@@ -710,6 +713,12 @@ async function calculatePrice({
         for (const rule of activeRouteRules) {
             if (rule.pickupLat != null && rule.pickupLng != null &&
                 rule.dropLat != null && rule.dropLng != null) {
+                // Do not match Airport-specific route rule via radius if the user search is not an airport pickup
+                const isRuleAirport = /airport/i.test(rule.pickupLocation || '');
+                const isUserAirport = /airport/i.test(sourceCity || '') || normalizedRideType === 'Airport';
+                if (isRuleAirport && !isUserAirport) {
+                    continue;
+                }
                 const distPickup = getHaversineDistance(
                     pLat, pLng,
                     safeNumber(rule.pickupLat, null), safeNumber(rule.pickupLng, null)
@@ -740,11 +749,19 @@ async function calculatePrice({
         console.log(`[Pricing Engine] Priority 1 Match: RoutePricing ID=${routeRule._id}`);
 
         const fixedPrice = safeNumber(routeRule.fixedPrice, 0);
+        const adminSetPrice = fixedPrice;
+        const ratePerKm = safeNumber(routeRule.extraKmRate || routeRule.ratePerKm, 0);
+        const distanceFare = ratePerKm > 0 ? Math.round(resolvedDistance * ratePerKm) : 0;
+        const selectedBaseFare = distanceFare > 0 ? Math.max(distanceFare, adminSetPrice) : adminSetPrice;
+
         const details = {
             type: 'Route-specific Fixed Price',
             pickup: routeRule.pickupLocation,
             drop: routeRule.dropLocation,
-            baseFare: fixedPrice
+            baseFare: selectedBaseFare,
+            adminSetPrice,
+            distanceFare: distanceFare > 0 ? distanceFare : undefined,
+            selectedBaseFare
         };
 
         if (routeRule.includeToll) details.tollTax = 'Included';
@@ -752,7 +769,7 @@ async function calculatePrice({
         if (routeRule.includeNightAllowance) details.nightAllowance = 'Included';
 
         const result = buildFareResult({
-            rawFare: fixedPrice,
+            rawFare: selectedBaseFare,
             addonTotal,
             appliedAddons,
             multiplier,
@@ -871,7 +888,7 @@ async function calculatePrice({
     // Fetch all active rules for this rideCategory and carCategory
     const candidateRules = await StatePricing.find({
         rideCategory: { $regex: new RegExp('^' + normalizedRideType + '$', 'i') },
-        carCategory: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\+') + '$', 'i') },
+        carCategory: { $regex: new RegExp('^' + normalizedCarCategory.replace(/\+/g, '\\+') + '$', 'i') },
         status: 'Active'
     }).sort({ updatedAt: -1, createdAt: -1 });
 
@@ -968,70 +985,76 @@ async function calculatePrice({
         };
 
         if (normalizedRideType === 'Oneway') {
-            // Outstation OneWay Slabs:
-            // 0 to 50 km -> Billable 50 km
-            // 51 to 100 km -> Billable 100 km
-            // 101 to 150 km -> Billable 150 km
-            // 151 to 200 km (Upto 200 kms) -> Billable 200 km
-            // > 200 km (Upto 4000 kms) -> Base 200 km + Extra kms @ extraKmRate
+            // Outstation OneWay Slabs: 0-50 km, 51-100 km, 101-150 km, 151-200 km, 201-4000 km
             let slab = '0-50 km';
-            let billableKms = 50;
-            let extraKms = 0;
-            let extraKmCharges = 0;
-            let distanceFare = 0;
+            let slabRate = ratePerKm;
 
             if (resolvedDistance <= 50) {
                 slab = '0-50 km';
-                billableKms = 50;
-                distanceFare = billableKms * ratePerKm;
+                if (stateRule.rate0to50 != null) slabRate = safeNumber(stateRule.rate0to50, ratePerKm);
+                else if (stateRule.slabRates?.['0-50 km'] != null) slabRate = safeNumber(stateRule.slabRates['0-50 km'], ratePerKm);
             } else if (resolvedDistance <= 100) {
                 slab = '51-100 km';
-                billableKms = 100;
-                distanceFare = billableKms * ratePerKm;
+                if (stateRule.rate51to100 != null) slabRate = safeNumber(stateRule.rate51to100, ratePerKm);
+                else if (stateRule.slabRates?.['51-100 km'] != null) slabRate = safeNumber(stateRule.slabRates['51-100 km'], ratePerKm);
             } else if (resolvedDistance <= 150) {
                 slab = '101-150 km';
-                billableKms = 150;
-                distanceFare = billableKms * ratePerKm;
+                if (stateRule.rate101to150 != null) slabRate = safeNumber(stateRule.rate101to150, ratePerKm);
+                else if (stateRule.slabRates?.['101-150 km'] != null) slabRate = safeNumber(stateRule.slabRates['101-150 km'], ratePerKm);
             } else if (resolvedDistance <= 200) {
                 slab = '151-200 km';
-                billableKms = 200;
-                distanceFare = billableKms * ratePerKm;
+                if (stateRule.rate151to200 != null) slabRate = safeNumber(stateRule.rate151to200, ratePerKm);
+                else if (stateRule.slabRates?.['151-200 km'] != null) slabRate = safeNumber(stateRule.slabRates['151-200 km'], ratePerKm);
             } else {
-                slab = 'Upto 4000 km';
-                billableKms = resolvedDistance;
-                extraKms = 0;
-                extraKmCharges = 0;
-                distanceFare = resolvedDistance * ratePerKm;
+                slab = '201-4000 km';
+                if (stateRule.rate201to4000 != null) slabRate = safeNumber(stateRule.rate201to4000, ratePerKm);
+                else if (stateRule.slabRates?.['201-4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['201-4000 km'], ratePerKm);
+                else if (stateRule.slabRates?.['Upto 4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['Upto 4000 km'], ratePerKm);
             }
 
-            // Decimal rates (e.g. 10.2) supported, price calculated round
-            distanceFare = Math.round(distanceFare);
+            // Price 1: Distance fare = Total one-way distance × per-km rate from matching slab
+            const distanceFare = Math.round(resolvedDistance * slabRate);
+
+            // Price 2: Admin-set price = applicable fixed or minimum price configured in admin panel
+            const adminSetPrice = safePositive(
+                stateRule.threshold ?? stateRule.adminSetPrice ?? stateRule.minPrice ?? stateRule.fixedFare ?? stateRule.baseFare,
+                500
+            );
+
+            // Compare these two prices and select the higher one as base fare:
+            // Formula: selectedBaseFare = Math.max(distanceFare, adminSetPrice)
+            const selectedBaseFare = Math.max(distanceFare, adminSetPrice);
 
             // Night driving allowances: Rs (Applicable once if ride time falls between 11 pm till 6 am)
             const isNight = isNightTime(pickupTime, stateRule.nightStartHour ?? 23, stateRule.nightEndHour ?? 6);
             const appliedNightAllowance = isNight ? nightAllowance : 0;
 
-            const calculatedTotal = Math.round(
-                distanceFare + driverBata + appliedNightAllowance + toll + parking +
-                permit + stateTax + airportEntry + otherCharges
-            );
-
-            // Threshold comparison: 'which value is more will show in price now set threshold value 500'
-            baseFareTotal = Math.max(calculatedTotal, Math.round(threshold));
+            baseFareTotal = Math.round(selectedBaseFare + appliedNightAllowance);
 
             Object.assign(details, {
                 slab,
-                billableKms,
+                billableKms: resolvedDistance,
                 actualDistance: resolvedDistance,
-                extraKms,
-                extraKmCharges,
+                extraKms: 0,
+                extraKmCharges: 0,
                 distanceFare,
+                ratePerKm: slabRate,
+                extraKmRate: slabRate,
+                adminSetPrice,
+                threshold: adminSetPrice,
+                selectedBaseFare,
+                chosenBaseFare: selectedBaseFare,
+                comparison: {
+                    distanceFare,
+                    adminSetPrice,
+                    threshold: adminSetPrice,
+                    selected: selectedBaseFare === distanceFare ? 'distanceFare' : 'adminSetPrice'
+                },
                 driverBata,
                 nightAllowance: appliedNightAllowance,
                 isNight,
-                rawCalculatedTotal: calculatedTotal,
-                threshold,
-                isThresholdApplied: calculatedTotal < threshold,
+                rawCalculatedTotal: baseFareTotal,
+                isThresholdApplied: selectedBaseFare === adminSetPrice,
                 toll,
                 parking,
                 permit,
@@ -1042,64 +1065,72 @@ async function calculatePrice({
             });
         }
         else if (normalizedRideType === 'Roundtrip') {
-            // Roundtrip Slabs (0-50 km, 51-100 km, 101-150 km, 151-200 km, 200-4000 km)
-            // Distance fare = actual roundtrip distance * ratePerKm (beyond 200 km: 200*rate + extra*extraKmRate)
+            // Roundtrip Slabs (0-50 km, 51-100 km, 101-150 km, 151-200 km, 201-4000 km)
             let slab = '0-50 km';
-            let extraKms = 0;
-            let extraKmCharges = 0;
-            let distanceFare = 0;
+            let slabRate = ratePerKm;
 
             if (resolvedDistance <= 50) {
                 slab = '0-50 km';
-                distanceFare = resolvedDistance * ratePerKm;
+                if (stateRule.rate0to50 != null) slabRate = safeNumber(stateRule.rate0to50, ratePerKm);
+                else if (stateRule.slabRates?.['0-50 km'] != null) slabRate = safeNumber(stateRule.slabRates['0-50 km'], ratePerKm);
             } else if (resolvedDistance <= 100) {
                 slab = '51-100 km';
-                distanceFare = resolvedDistance * ratePerKm;
+                if (stateRule.rate51to100 != null) slabRate = safeNumber(stateRule.rate51to100, ratePerKm);
+                else if (stateRule.slabRates?.['51-100 km'] != null) slabRate = safeNumber(stateRule.slabRates['51-100 km'], ratePerKm);
             } else if (resolvedDistance <= 150) {
                 slab = '101-150 km';
-                distanceFare = resolvedDistance * ratePerKm;
+                if (stateRule.rate101to150 != null) slabRate = safeNumber(stateRule.rate101to150, ratePerKm);
+                else if (stateRule.slabRates?.['101-150 km'] != null) slabRate = safeNumber(stateRule.slabRates['101-150 km'], ratePerKm);
             } else if (resolvedDistance <= 200) {
                 slab = '151-200 km';
-                distanceFare = resolvedDistance * ratePerKm;
+                if (stateRule.rate151to200 != null) slabRate = safeNumber(stateRule.rate151to200, ratePerKm);
+                else if (stateRule.slabRates?.['151-200 km'] != null) slabRate = safeNumber(stateRule.slabRates['151-200 km'], ratePerKm);
             } else {
-                slab = 'Upto 4000 km';
-                extraKms = 0;
-                extraKmCharges = 0;
-                distanceFare = resolvedDistance * ratePerKm;
+                slab = '201-4000 km';
+                if (stateRule.rate201to4000 != null) slabRate = safeNumber(stateRule.rate201to4000, ratePerKm);
+                else if (stateRule.slabRates?.['201-4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['201-4000 km'], ratePerKm);
+                else if (stateRule.slabRates?.['Upto 4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['Upto 4000 km'], ratePerKm);
             }
 
-            distanceFare = Math.round(distanceFare);
+            // Price 1: Distance fare = Total round-trip distance × rate for slab containing total round-trip distance
+            const distanceFare = Math.round(resolvedDistance * slabRate);
 
-            // Value 2: Total Hours and Hourly Charges between trip start and end
+            // Price 2: Hourly fare = Total billable booking hours × applicable admin hourly rate
             let totalHours = 0;
-            const startDt = parseDateTime(pickupDate, pickupTime);
-            const endDt = parseDateTime(returnDate, returnTime);
-
-            if (startDt && endDt && endDt > startDt) {
-                const diffMs = endDt - startDt;
-                totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+            const explicitHours = safeNumber(bookingDuration ?? durationHours ?? hours, 0);
+            if (explicitHours > 0) {
+                totalHours = explicitHours;
             } else {
-                const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
-                totalHours = rtDays > 1 ? rtDays * 24 : 4;
+                const startDt = parseDateTime(pickupDate, pickupTime);
+                const endDt = parseDateTime(returnDate, returnTime);
+
+                if (startDt && endDt && endDt > startDt) {
+                    const diffMs = endDt - startDt;
+                    totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+                } else {
+                    const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
+                    totalHours = rtDays > 1 ? rtDays * 24 : 4;
+                }
             }
 
             const activeHourlyRate = safePositive(stateRule.hourlyRate, 100);
             const hourlyFare = Math.round(totalHours * activeHourlyRate);
 
-            // Value 3: Admin Set Threshold Value for this city / car category (e.g. 1000)
-            const activeThreshold = safePositive(stateRule.threshold, 1000);
+            // Price 3: Admin-set price = applicable minimum or fixed base price configured in admin panel
+            const adminSetPrice = safePositive(
+                stateRule.threshold ?? stateRule.adminSetPrice ?? stateRule.minPrice ?? stateRule.fixedFare ?? stateRule.baseFare,
+                1000
+            );
 
-            // Compare those three values: whichever is more will show for the car
-            // 1. Distance fare (e.g. 30 * 15 = 450)
-            // 2. Hourly fare (e.g. 4 * 100 = 400)
-            // 3. Threshold value (e.g. 1000)
-            const chosenBaseFare = Math.max(distanceFare, hourlyFare, activeThreshold);
+            // Compare all three prices and select highest one:
+            // Formula: selectedBaseFare = Math.max(distanceFare, hourlyFare, adminSetPrice)
+            const selectedBaseFare = Math.max(distanceFare, hourlyFare, adminSetPrice);
 
             // Night driving allowance if applicable (11 PM - 6 AM)
             const isNight = isNightTime(pickupTime, stateRule.nightStartHour ?? 23, stateRule.nightEndHour ?? 6);
             const appliedNightAllowance = isNight ? nightAllowance : 0;
 
-            baseFareTotal = Math.round(chosenBaseFare + appliedNightAllowance + toll + parking + permit + stateTax + airportEntry + otherCharges);
+            baseFareTotal = Math.round(selectedBaseFare + appliedNightAllowance);
 
             const oneWayDist = oneWayDistance != null && safeNumber(oneWayDistance, 0) > 0
                 ? safeNumber(oneWayDistance, 0)
@@ -1110,26 +1141,31 @@ async function calculatePrice({
                 actualDistance: resolvedDistance,
                 oneWayDistance: oneWayDist,
                 distanceFare,
-                ratePerKm,
-                extraKmRate,
-                extraKms,
-                extraKmCharges,
+                ratePerKm: slabRate,
+                extraKmRate: slabRate,
+                extraKms: 0,
+                extraKmCharges: 0,
                 totalHours,
                 hourlyRate: activeHourlyRate,
                 hourlyFare,
-                threshold: activeThreshold,
-                chosenBaseFare,
+                adminSetPrice,
+                threshold: adminSetPrice,
+                selectedBaseFare,
+                chosenBaseFare: selectedBaseFare,
                 comparison: {
                     distanceFare,
                     hourlyFare,
-                    threshold: activeThreshold,
-                    selected: chosenBaseFare === distanceFare ? 'distanceFare' : (chosenBaseFare === hourlyFare ? 'hourlyFare' : 'threshold')
+                    adminSetPrice,
+                    threshold: adminSetPrice,
+                    selected: selectedBaseFare === distanceFare
+                        ? 'distanceFare'
+                        : (selectedBaseFare === hourlyFare ? 'hourlyFare' : 'adminSetPrice')
                 },
                 driverBata,
                 nightAllowance: appliedNightAllowance,
                 isNight,
                 rawCalculatedTotal: baseFareTotal,
-                isThresholdApplied: chosenBaseFare === activeThreshold,
+                isThresholdApplied: selectedBaseFare === adminSetPrice,
                 toll,
                 parking,
                 permit,
@@ -1194,12 +1230,12 @@ async function calculatePrice({
     console.log(`[Pricing Engine] Priority 3 Match: Standard Category Fallback (${normalizedCarCategory})`);
 
     let carCat = await CarCategory.findOne({
-        name: { $regex: new RegExp('^' + normalizedCarCategory.replace('+', '\+') + '$', 'i') }
+        name: { $regex: new RegExp('^' + normalizedCarCategory.replace(/\+/g, '\\+') + '$', 'i') }
     });
 
     if (!carCat) {
         carCat = await CarCategory.findOne({
-            displayName: { $regex: new RegExp(normalizedCarCategory.replace('+', '\+'), 'i') }
+            displayName: { $regex: new RegExp(normalizedCarCategory.replace(/\+/g, '\\+'), 'i') }
         });
     }
 
@@ -1223,103 +1259,10 @@ async function calculatePrice({
 
     let baseFareTotal = 0;
     let slab = '0-50 km';
-    let billableKms = 50;
+    let billableKms = resolvedDistance;
     let extraKms = 0;
     let extraKmCharges = 0;
     let distanceFare = 0;
-
-    if (normalizedRideType === 'Oneway') {
-        if (resolvedDistance <= 50) {
-            slab = '0-50 km';
-            billableKms = 50;
-            distanceFare = billableKms * perKmRate;
-        } else if (resolvedDistance <= 100) {
-            slab = '51-100 km';
-            billableKms = 100;
-            distanceFare = billableKms * perKmRate;
-        } else if (resolvedDistance <= 150) {
-            slab = '101-150 km';
-            billableKms = 150;
-            distanceFare = billableKms * perKmRate;
-        } else if (resolvedDistance <= 200) {
-            slab = '151-200 km';
-            billableKms = 200;
-            distanceFare = billableKms * perKmRate;
-        } else {
-            slab = 'Upto 4000 km';
-            billableKms = resolvedDistance;
-            extraKms = 0;
-            extraKmCharges = 0;
-            distanceFare = resolvedDistance * perKmRate;
-        }
-
-        distanceFare = Math.round(distanceFare);
-
-        const isNight = isNightTime(pickupTime, 23, 6);
-        const nightAllowance = isNight ? def.nightAllowance : 0;
-
-        const calculatedTotal = Math.round(distanceFare + driverBata + nightAllowance);
-        baseFareTotal = Math.max(calculatedTotal, threshold);
-    } else if (normalizedRideType === 'Roundtrip') {
-        let slab = '0-50 km';
-        let extraKms = 0;
-        let extraKmCharges = 0;
-        let distanceFare = 0;
-
-        if (resolvedDistance <= 50) {
-            slab = '0-50 km';
-            distanceFare = resolvedDistance * perKmRate;
-        } else if (resolvedDistance <= 100) {
-            slab = '51-100 km';
-            distanceFare = resolvedDistance * perKmRate;
-        } else if (resolvedDistance <= 150) {
-            slab = '101-150 km';
-            distanceFare = resolvedDistance * perKmRate;
-        } else if (resolvedDistance <= 200) {
-            slab = '151-200 km';
-            distanceFare = resolvedDistance * perKmRate;
-        } else {
-            slab = 'Upto 4000 km';
-            extraKms = 0;
-            extraKmCharges = 0;
-            distanceFare = resolvedDistance * perKmRate;
-        }
-
-        distanceFare = Math.round(distanceFare);
-
-        let totalHours = 0;
-        const startDt = parseDateTime(pickupDate, pickupTime);
-        const endDt = parseDateTime(returnDate, returnTime);
-        if (startDt && endDt && endDt > startDt) {
-            const diffMs = endDt - startDt;
-            totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
-        } else {
-            const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
-            totalHours = rtDays > 1 ? rtDays * 24 : 4;
-        }
-
-        const activeHourlyRate = 100;
-        const hourlyFare = Math.round(totalHours * activeHourlyRate);
-        const activeThreshold = 1000;
-
-        const chosenBaseFare = Math.max(distanceFare, hourlyFare, activeThreshold);
-        baseFareTotal = chosenBaseFare;
-        billableKms = resolvedDistance;
-
-        Object.assign(details, {
-            slab,
-            distanceFare,
-            totalHours,
-            hourlyRate: activeHourlyRate,
-            hourlyFare,
-            threshold: activeThreshold,
-            chosenBaseFare
-        });
-    } else {
-        billableKms = Math.max(resolvedDistance, 50);
-        distanceFare = Math.round(billableKms * perKmRate);
-        baseFareTotal = Math.max(distanceFare + driverBata, threshold);
-    }
 
     const details = {
         type: `Standard Rate (${carCat ? carCat.displayName : normalizedCarCategory})`,
@@ -1333,12 +1276,131 @@ async function calculatePrice({
         distanceFare,
         driverBata,
         threshold,
+        adminSetPrice: threshold,
         waitingChargePerHour,
         waitingFreeMins,
         nightAllowance: def.nightAllowance,
         distance: resolvedDistance,
         durationMinutes: mapRouteInfo?.durationMinutes
     };
+
+    if (normalizedRideType === 'Oneway') {
+        if (resolvedDistance <= 50) {
+            slab = '0-50 km';
+        } else if (resolvedDistance <= 100) {
+            slab = '51-100 km';
+        } else if (resolvedDistance <= 150) {
+            slab = '101-150 km';
+        } else if (resolvedDistance <= 200) {
+            slab = '151-200 km';
+        } else {
+            slab = '201-4000 km';
+        }
+
+        billableKms = resolvedDistance;
+        distanceFare = Math.round(resolvedDistance * perKmRate);
+
+        const adminSetPrice = threshold;
+        const selectedBaseFare = Math.max(distanceFare, adminSetPrice);
+
+        const isNight = isNightTime(pickupTime, 23, 6);
+        const nightAllowance = isNight ? def.nightAllowance : 0;
+
+        baseFareTotal = Math.round(selectedBaseFare + nightAllowance);
+
+        Object.assign(details, {
+            slab,
+            billableKms: resolvedDistance,
+            actualDistance: resolvedDistance,
+            extraKms: 0,
+            extraKmCharges: 0,
+            distanceFare,
+            adminSetPrice,
+            threshold: adminSetPrice,
+            selectedBaseFare,
+            chosenBaseFare: selectedBaseFare,
+            comparison: {
+                distanceFare,
+                adminSetPrice,
+                threshold: adminSetPrice,
+                selected: selectedBaseFare === distanceFare ? 'distanceFare' : 'adminSetPrice'
+            }
+        });
+    } else if (normalizedRideType === 'Roundtrip') {
+        let slab = '0-50 km';
+        if (resolvedDistance <= 50) {
+            slab = '0-50 km';
+        } else if (resolvedDistance <= 100) {
+            slab = '51-100 km';
+        } else if (resolvedDistance <= 150) {
+            slab = '101-150 km';
+        } else if (resolvedDistance <= 200) {
+            slab = '151-200 km';
+        } else {
+            slab = '201-4000 km';
+        }
+
+        distanceFare = Math.round(resolvedDistance * perKmRate);
+
+        let totalHours = 0;
+        const explicitHours = safeNumber(bookingDuration ?? durationHours ?? hours, 0);
+        if (explicitHours > 0) {
+            totalHours = explicitHours;
+        } else {
+            const startDt = parseDateTime(pickupDate, pickupTime);
+            const endDt = parseDateTime(returnDate, returnTime);
+            if (startDt && endDt && endDt > startDt) {
+                const diffMs = endDt - startDt;
+                totalHours = Math.ceil(diffMs / (1000 * 60 * 60));
+            } else {
+                const rtDays = Math.max(1, parseInt(safeNumber(resolvedDays, 1), 10) || 1);
+                totalHours = rtDays > 1 ? rtDays * 24 : 4;
+            }
+        }
+
+        const activeHourlyRate = 100;
+        const hourlyFare = Math.round(totalHours * activeHourlyRate);
+        const adminSetPrice = 1000;
+
+        const selectedBaseFare = Math.max(distanceFare, hourlyFare, adminSetPrice);
+        baseFareTotal = selectedBaseFare;
+        billableKms = resolvedDistance;
+
+        Object.assign(details, {
+            slab,
+            actualDistance: resolvedDistance,
+            billableKms: resolvedDistance,
+            distanceFare,
+            totalHours,
+            hourlyRate: activeHourlyRate,
+            hourlyFare,
+            adminSetPrice,
+            threshold: adminSetPrice,
+            selectedBaseFare,
+            chosenBaseFare: selectedBaseFare,
+            comparison: {
+                distanceFare,
+                hourlyFare,
+                adminSetPrice,
+                threshold: adminSetPrice,
+                selected: selectedBaseFare === distanceFare
+                    ? 'distanceFare'
+                    : (selectedBaseFare === hourlyFare ? 'hourlyFare' : 'adminSetPrice')
+            }
+        });
+    } else {
+        billableKms = Math.max(resolvedDistance, 50);
+        distanceFare = Math.round(billableKms * perKmRate);
+        baseFareTotal = Math.max(distanceFare + driverBata, threshold);
+    }
+
+    Object.assign(details, {
+        slab,
+        minKms: billableKms,
+        billableKms,
+        distanceFare,
+        threshold: details.adminSetPrice || threshold
+    });
 
     const fallbackResult = buildFareResult({
         rawFare: baseFareTotal,

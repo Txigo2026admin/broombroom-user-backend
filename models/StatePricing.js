@@ -85,6 +85,36 @@ const StatePricing = sequelize.define('StatePricing', {
         type: DataTypes.FLOAT,
         defaultValue: 500
     },
+    rate0to50: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    rate51to100: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    rate101to150: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    rate151to200: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    rate201to4000: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    slabRates: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+        defaultValue: null
+    },
     advanceType: {
         type: DataTypes.STRING,
         defaultValue: 'Percentage'
