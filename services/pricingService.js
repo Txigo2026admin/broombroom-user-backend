@@ -52,19 +52,12 @@ const RENTAL_FALLBACK_TABLE = {
         8: { kms: 80, fare: 13051, extraKm: 50, extraHr: 500 },
         10: { kms: 100, fare: 14051, extraKm: 50, extraHr: 500 },
         12: { kms: 120, fare: 15051, extraKm: 50, extraHr: 500 },
-    },
-    'Hatchback': {
-        5: { kms: 50, fare: 3551, extraKm: 20, extraHr: 200 },
-        8: { kms: 80, fare: 4551, extraKm: 20, extraHr: 200 },
-        10: { kms: 100, fare: 5051, extraKm: 20, extraHr: 200 },
-        12: { kms: 120, fare: 6051, extraKm: 20, extraHr: 200 },
     }
 };
 
 // Default Airport Transfer Fallback (0-15 km base, extra kms, waiting, night allowance, threshold)
 const AIRPORT_FALLBACK_TABLE = {
     'Sedan': { baseKms: 15, baseFare: 750, extraKmRate: 16, advanceAmount: 500, waitingChargePerHour: 150, nightAllowance: 250, threshold: 500 },
-    'Hatchback': { baseKms: 15, baseFare: 650, extraKmRate: 14, advanceAmount: 500, waitingChargePerHour: 150, nightAllowance: 200, threshold: 500 },
     'SUV': { baseKms: 15, baseFare: 1050, extraKmRate: 20, advanceAmount: 500, waitingChargePerHour: 200, nightAllowance: 300, threshold: 500 },
     'SUV+': { baseKms: 15, baseFare: 1350, extraKmRate: 24, advanceAmount: 500, waitingChargePerHour: 250, nightAllowance: 350, threshold: 500 },
     '13 Seater Traveller': { baseKms: 15, baseFare: 2500, extraKmRate: 35, advanceAmount: 1000, waitingChargePerHour: 350, nightAllowance: 450, threshold: 1000 },
@@ -195,8 +188,7 @@ function normalizeCarCategory(cat) {
     if (c.includes('17') && (c.includes('traveller') || c.includes('tempo') || c.includes('seater'))) return '17 Seater Traveller';
     if ((c.includes('25') || c.includes('24')) && (c.includes('traveller') || c.includes('tempo') || c.includes('seater'))) return '25 Seater Traveller';
     if (c.includes('traveller') || c.includes('tempo')) return '13 Seater Traveller';
-    if (c.includes('hatchback') || c.includes('mini') || c.includes('wagon')) return 'Hatchback';
-    if (c.includes('sedan') || c.includes('dzire') || c.includes('etios')) return 'Sedan';
+    if (c.includes('sedan') || c.includes('dzire') || c.includes('etios') || c.includes('hatchback') || c.includes('mini') || c.includes('wagon')) return 'Sedan';
     if (c.includes('suv+') || c.includes('luxury') || c.includes('crysta')) return 'SUV+';
     if (c.includes('suv') || c.includes('ertiga') || c.includes('innova')) return 'SUV';
     return cat.trim();

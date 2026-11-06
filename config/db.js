@@ -79,6 +79,10 @@ const connectDB = async () => {
                 ADD COLUMN IF NOT EXISTS "slabRates" JSONB,
                 ADD COLUMN IF NOT EXISTS "advanceType" VARCHAR(50) DEFAULT 'Percentage',
                 ADD COLUMN IF NOT EXISTS "advanceValue" FLOAT DEFAULT 20;
+
+                DELETE FROM airport_pricings WHERE LOWER("carCategory") = 'hatchback';
+                DELETE FROM state_pricings WHERE LOWER("carCategory") = 'hatchback';
+                DELETE FROM car_categories WHERE LOWER("name") = 'hatchback';
             `);
         } catch (migErr) {
             console.error('Auto migration columns error:', migErr.message);
