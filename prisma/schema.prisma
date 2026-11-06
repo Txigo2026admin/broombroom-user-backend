@@ -177,6 +177,8 @@ model users {
   status       String?   @default("Active") @db.VarChar(255)
   loginCount   Int?      @default(1)
   leadType     String?   @default("New") @db.VarChar(50)
+  source       String?   @default("BroomBoom App") @db.VarChar(100)
+  loginHistory Json?     @default("[]")
   registeredAt DateTime? @db.Timestamptz(6)
   createdAt    DateTime  @db.Timestamptz(6)
   updatedAt    DateTime  @db.Timestamptz(6)

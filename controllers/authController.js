@@ -305,6 +305,13 @@ exports.verifyOtp = async (req, res) => {
         // Create user if not exists
         // -------------------------------------------------
         if (!user) {
+            const loginNow = new Date().toISOString();
+            const initialLog = [{
+                id: crypto.randomUUID(),
+                source: 'BroomBoom App',
+                loginTime: loginNow,
+                leadType: 'New'
+            }];
             user = await prisma.users.create({
                 data: {
                     id: crypto.randomUUID(),
@@ -313,6 +320,8 @@ exports.verifyOtp = async (req, res) => {
                     status: 'Active',
                     loginCount: 1,
                     leadType: 'New',
+                    source: 'BroomBoom App',
+                    loginHistory: initialLog,
                     registeredAt: new Date(),
                     createdAt: new Date(),
                     updatedAt: new Date()
@@ -341,11 +350,33 @@ exports.verifyOtp = async (req, res) => {
             const newLoginCount = (user.loginCount || 1) + 1;
             const updatedLeadType = hasPaidBooking ? 'Loyal' : 'Existing';
 
+            let currentHistory = [];
+            try {
+                if (Array.isArray(user.loginHistory)) {
+                    currentHistory = user.loginHistory;
+                } else if (typeof user.loginHistory === 'string') {
+                    currentHistory = JSON.parse(user.loginHistory || '[]');
+                }
+            } catch (e) {
+                currentHistory = [];
+            }
+
+            const appLoginEntry = {
+                id: crypto.randomUUID(),
+                source: 'BroomBoom App',
+                loginTime: new Date().toISOString(),
+                leadType: updatedLeadType
+            };
+
+            const updatedHistory = [appLoginEntry, ...currentHistory].slice(0, 50);
+
             user = await prisma.users.update({
                 where: { id: user.id },
                 data: {
                     loginCount: newLoginCount,
                     leadType: updatedLeadType,
+                    source: 'BroomBoom App',
+                    loginHistory: updatedHistory,
                     updatedAt: new Date()
                 }
             });

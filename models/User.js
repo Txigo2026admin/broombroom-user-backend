@@ -34,6 +34,14 @@ const User = sequelize.define('User', {
         type: DataTypes.STRING,
         defaultValue: 'New'
     },
+    source: {
+        type: DataTypes.STRING,
+        defaultValue: 'BroomBoom App'
+    },
+    loginHistory: {
+        type: DataTypes.JSONB,
+        defaultValue: []
+    },
     registeredAt: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW

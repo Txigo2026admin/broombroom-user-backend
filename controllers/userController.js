@@ -64,10 +64,35 @@ exports.createUser = async (req, res) => {
         if (existingUser) {
             // Existing user logged in again!
             const newLoginCount = (existingUser.loginCount || 1) + 1;
+            const loginSource = req.body.source || 'BroomBoom Web';
+            const currentLoginTime = req.body.lastLoginAt || new Date().toISOString();
+
+            let currentHistory = [];
+            try {
+                if (Array.isArray(existingUser.loginHistory)) {
+                    currentHistory = existingUser.loginHistory;
+                } else if (typeof existingUser.loginHistory === 'string') {
+                    currentHistory = JSON.parse(existingUser.loginHistory || '[]');
+                }
+            } catch (e) {
+                currentHistory = [];
+            }
+
+            const loginEntry = {
+                id: require('crypto').randomUUID(),
+                source: loginSource,
+                loginTime: currentLoginTime,
+                leadType: (existingUser.leadType || '').toLowerCase() === 'loyal' ? 'Loyal' : 'Existing'
+            };
+
+            const updatedHistory = [loginEntry, ...currentHistory].slice(0, 50);
+
             const updates = {
                 loginCount: newLoginCount,
                 updatedAt: new Date(),
-                status: 'Active'
+                status: 'Active',
+                source: loginSource,
+                loginHistory: updatedHistory
             };
 
             // Upgrade leadType to Existing if not already Loyal
@@ -90,6 +115,15 @@ exports.createUser = async (req, res) => {
         }
 
         // User is brand new - create user lead
+        const loginSource = req.body.source || 'BroomBoom Web';
+        const currentLoginTime = req.body.lastLoginAt || new Date().toISOString();
+        const initialLog = [{
+            id: require('crypto').randomUUID(),
+            source: loginSource,
+            loginTime: currentLoginTime,
+            leadType: req.body.leadType || 'New'
+        }];
+
         const user = await User.create({
             name: rawName || `User ${tenDigitPhone ? tenDigitPhone.slice(-4) : 'Guest'}`,
             phone: tenDigitPhone || rawPhone,
@@ -97,6 +131,8 @@ exports.createUser = async (req, res) => {
             status: req.body.status || 'Active',
             loginCount: 1,
             leadType: req.body.leadType || 'New',
+            source: loginSource,
+            loginHistory: initialLog,
             registeredAt: new Date()
         });
 

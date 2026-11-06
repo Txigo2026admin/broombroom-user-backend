@@ -47,6 +47,42 @@ const connectDB = async () => {
         if (models.AirportPricing) {
             await models.AirportPricing.sync({ alter: true }).catch(() => {});
         }
+        if (models.StatePricing) {
+            await models.StatePricing.sync({ alter: true }).catch(() => {});
+        }
+        if (models.RoutePricing) {
+            await models.RoutePricing.sync({ alter: true }).catch(() => {});
+        }
+        if (models.RentalPackage) {
+            await models.RentalPackage.sync({ alter: true }).catch(() => {});
+        }
+        if (models.CarCategory) {
+            await models.CarCategory.sync({ alter: true }).catch(() => {});
+        }
+        if (models.PricingRule) {
+            await models.PricingRule.sync({ alter: true }).catch(() => {});
+        }
+        try {
+            await sequelize.query(`
+                ALTER TABLE users 
+                ADD COLUMN IF NOT EXISTS "source" VARCHAR(100) DEFAULT 'BroomBoom App',
+                ADD COLUMN IF NOT EXISTS "loginHistory" JSONB DEFAULT '[]'::jsonb;
+                UPDATE users SET "source" = 'BroomBoom App' WHERE "source" IS NULL OR "source" = '';
+                UPDATE users SET "loginHistory" = '[]'::jsonb WHERE "loginHistory" IS NULL;
+
+                ALTER TABLE state_pricings 
+                ADD COLUMN IF NOT EXISTS "rate0to50" FLOAT,
+                ADD COLUMN IF NOT EXISTS "rate51to100" FLOAT,
+                ADD COLUMN IF NOT EXISTS "rate101to150" FLOAT,
+                ADD COLUMN IF NOT EXISTS "rate151to200" FLOAT,
+                ADD COLUMN IF NOT EXISTS "rate201to4000" FLOAT,
+                ADD COLUMN IF NOT EXISTS "slabRates" JSONB,
+                ADD COLUMN IF NOT EXISTS "advanceType" VARCHAR(50) DEFAULT 'Percentage',
+                ADD COLUMN IF NOT EXISTS "advanceValue" FLOAT DEFAULT 20;
+            `);
+        } catch (migErr) {
+            console.error('Auto migration columns error:', migErr.message);
+        }
         isConnected = true;
         console.log('PostgreSQL connected successfully');
     } catch (error) {
