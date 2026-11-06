@@ -41,10 +41,12 @@ exports.createBooking = async (req, res) => {
                 }
 
                 let existingUser = await User.findOne({ where: { [Op.or]: orConditions } });
+                const bookingSource = req.body.source || (req.headers['user-agent']?.toLowerCase().includes('dart') ? 'BroomBoom App' : 'BroomBoom Web');
                 if (existingUser) {
                     await existingUser.update({
                         updatedAt: new Date(),
                         loginCount: (existingUser.loginCount || 1) + 1,
+                        source: bookingSource,
                         name: rawName && (!existingUser.name || existingUser.name === 'New User' || existingUser.name.startsWith('User ')) ? rawName : existingUser.name
                     });
                 } else {
@@ -55,6 +57,7 @@ exports.createBooking = async (req, res) => {
                         status: 'Active',
                         loginCount: 1,
                         leadType: 'New',
+                        source: bookingSource,
                         registeredAt: new Date()
                     });
                 }
