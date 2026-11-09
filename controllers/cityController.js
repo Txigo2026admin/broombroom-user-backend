@@ -43,9 +43,25 @@ exports.saveCity = async (req, res) => {
         const saveName = isGeneric ? cleanName : primaryName;
 
         // Check if city already exists by placeId or by name
+        let finalLat = lat != null ? String(lat) : null;
+        let finalLon = lon != null ? String(lon) : null;
+        let finalState = state || '';
+        let finalCountry = country || 'India';
+        let finalPlaceId = placeId ? String(placeId) : null;
+
+        // If coordinates missing, geocode via mapService (OSRM / Google Places)
+        if (!finalLat || !finalLon) {
+            const geo = await mapService.getCoordinates(displayName || cleanName);
+            if (geo) {
+                finalLat = String(geo.lat);
+                finalLon = String(geo.lng);
+                if (!finalState && geo.state) finalState = geo.state;
+            }
+        }
+
         let city = null;
-        if (placeId) {
-            city = await City.findOne({ placeId: String(placeId) });
+        if (finalPlaceId) {
+            city = await City.findOne({ placeId: finalPlaceId });
         }
         if (!city) {
             city = await City.findOne({
@@ -53,17 +69,22 @@ exports.saveCity = async (req, res) => {
             });
         }
         if (city) {
+            if ((!city.lat || !city.lon) && finalLat && finalLon) {
+                city.lat = finalLat;
+                city.lon = finalLon;
+                await city.save();
+            }
             return res.status(200).json(city);
         }
 
         city = await City.create({
             name: saveName,
             displayName: displayName || cleanName,
-            lat: lat ? String(lat) : undefined,
-            lon: lon ? String(lon) : undefined,
-            state: state || '',
-            country: country || 'India',
-            placeId: placeId ? String(placeId) : undefined
+            lat: finalLat || '0.0',
+            lon: finalLon || '0.0',
+            state: finalState,
+            country: finalCountry,
+            placeId: finalPlaceId || undefined
         });
 
         res.status(201).json(city);

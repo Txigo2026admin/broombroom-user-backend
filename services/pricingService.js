@@ -579,100 +579,106 @@ async function calculatePrice({
 
         // Condition 1: 0 - 15 km fixed charge set by admin
         // Condition 2: 15 - 25 km tier fixed charge set by admin
-        // Condition 3: Beyond 25 km -> distance * extraKmRate (e.g. 47 km * ₹15 = ₹705)
-        const isTier1 = currentDistance <= baseKms;
-        const isTier2 = currentDistance > baseKms && currentDistance <= maxAirportKms;
-        const activeTier = isTier1 ? '0-15 km' : isTier2 ? '15-25 km' : '>25 km';
-        const activeFare = isTier1
-            ? baseFare
-            : isTier2
-            ? fare15to25
-            : Math.round(currentDistance * extraKmRate);
+        // Condition 3: Beyond 25 km -> automatically shift to Outstation One-Way pricing
+        if (currentDistance > maxAirportKms) {
+            console.log(
+                `[Pricing Engine] Airport distance (${currentDistance} km) exceeds max airport limit (${maxAirportKms} km). ` +
+                `Automatically shifting to Outstation Oneway pricing.`
+            );
+            shiftedFromAirport = true;
+            normalizedRideType = 'Oneway';
+            // Do NOT return Airport pricing here — let execution fall through to Outstation One-Way rules!
+        } else {
+            const isTier1 = currentDistance <= baseKms;
+            const isTier2 = currentDistance > baseKms && currentDistance <= maxAirportKms;
+            const activeTier = isTier1 ? '0-15 km' : '15-25 km';
+            const activeFare = isTier1 ? baseFare : fare15to25;
 
-        let calculatedBaseFare = activeFare;
+            let calculatedBaseFare = activeFare;
 
-        // Night driving allowance: Applicable once if ride time falls between 11 pm till 6 am
-        const isNight = isNightTime(pickupTime, airportRule?.nightStartHour ?? 23, airportRule?.nightEndHour ?? 6);
-        if (isNight) {
-            calculatedBaseFare += nightAllowance;
+            // Night driving allowance: Applicable once if ride time falls between 11 pm till 6 am
+            const isNight = isNightTime(pickupTime, airportRule?.nightStartHour ?? 23, airportRule?.nightEndHour ?? 6);
+            if (isNight) {
+                calculatedBaseFare += nightAllowance;
+            }
+
+            const advanceType = airportRule?.advanceType || 'Percentage';
+            const advanceValue = safePositive(airportRule?.advanceValue, (airportRule?.advanceAmount || globalAdvancePct || 20));
+            const advanceAmount = advanceType === 'Percentage'
+                ? Math.round(calculatedBaseFare * (advanceValue / 100))
+                : Math.min(calculatedBaseFare, safePositive(airportRule?.advanceAmount, fallback.advanceAmount));
+
+            const ruleCityName = airportRule?.city || airportCity || 'Default';
+
+            console.log(
+                `[Pricing Engine] Priority 1 Match: Airport Transfer (${ruleCityName}, ` +
+                `${normalizedCarCategory}, Dist=${currentDistance}km, Tier=${activeTier}, BaseFare=₹${activeFare}, ` +
+                `Night=+₹${isNight ? nightAllowance : 0}, Total=₹${calculatedBaseFare}, Advance=₹${advanceAmount}, Threshold=₹${threshold})`
+            );
+
+            const details = {
+                type: `Airport Transfer (${ruleCityName})`,
+                city: ruleCityName,
+                airportCity: airportCity || ruleCityName,
+                airportName: airportObj?.name || 'Airport',
+                carCategory: normalizedCarCategory,
+                tier: activeTier,
+                baseFare: activeFare,
+                fare0to15: baseFare,
+                fare15to25: fare15to25,
+                baseKms,
+                maxAirportKms,
+                distance: currentDistance,
+                durationMinutes: mapRouteInfo?.durationMinutes,
+                extraKms: isTier1 ? 0 : Math.round((currentDistance - baseKms) * 10) / 10,
+                extraKmRate,
+                waitingCharge,
+                waitingChargePerHour: waitingCharge,
+                waitingFreeMins: airportRule?.waitingFreeMins || 60,
+                nightAllowance,
+                isNightApplicable: isNight,
+                nightWindow: '11 pm till 6 am',
+                threshold,
+                advanceAmount,
+                advance: advanceAmount,
+                inclusions: [
+                    `Fixed Airport Transfer Charges (${activeTier})`,
+                    'Driver Allowance',
+                    'Airport Assistance'
+                ],
+                exclusions: [
+                    'Toll / State Tax',
+                    'Parking Charges (as per actuals)',
+                    'GST (5%)',
+                    `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
+                    `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`
+                ],
+                termsAndConditions: [
+                    `0-${baseKms} km: fixed charges of ₹${baseFare}`,
+                    `15-${maxAirportKms} km: fixed charges of ₹${fare15to25}`,
+                    `Beyond ${maxAirportKms} km: automatically switched to Outstation One-Way pricing`,
+                    `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
+                    `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`,
+                    `Threshold value: ₹${threshold} to confirm booking`
+                ]
+            };
+
+            const result = buildFareResult({
+                rawFare: calculatedBaseFare,
+                addonTotal,
+                appliedAddons,
+                multiplier,
+                details,
+                advanceType,
+                advanceValue,
+                appliedRule: airportRule?.id || airportRule?._id || `airport-${normalizedCarCategory}`,
+                ruleType: 'AirportPricing',
+                distance: currentDistance,
+                durationMinutes: mapRouteInfo?.durationMinutes
+            });
+
+            if (result) return returnFare(result);
         }
-
-        const advanceType = airportRule?.advanceType || 'Percentage';
-        const advanceValue = safePositive(airportRule?.advanceValue, (airportRule?.advanceAmount || globalAdvancePct || 20));
-        const advanceAmount = advanceType === 'Percentage'
-            ? Math.round(calculatedBaseFare * (advanceValue / 100))
-            : Math.min(calculatedBaseFare, safePositive(airportRule?.advanceAmount, fallback.advanceAmount));
-
-        const ruleCityName = airportRule?.city || airportCity || 'Default';
-
-        console.log(
-            `[Pricing Engine] Priority 1 Match: Airport Transfer (${ruleCityName}, ` +
-            `${normalizedCarCategory}, Dist=${currentDistance}km, Tier=${activeTier}, BaseFare=₹${activeFare}, ` +
-            `Night=+₹${isNight ? nightAllowance : 0}, Total=₹${calculatedBaseFare}, Advance=₹${advanceAmount}, Threshold=₹${threshold})`
-        );
-
-        const details = {
-            type: `Airport Transfer (${ruleCityName})`,
-            city: ruleCityName,
-            airportCity: airportCity || ruleCityName,
-            airportName: airportObj?.name || 'Airport',
-            carCategory: normalizedCarCategory,
-            tier: activeTier,
-            baseFare: activeFare,
-            fare0to15: baseFare,
-            fare15to25: fare15to25,
-            baseKms,
-            maxAirportKms,
-            distance: currentDistance,
-            durationMinutes: mapRouteInfo?.durationMinutes,
-            extraKms: isTier1 ? 0 : Math.round((currentDistance - (isTier2 ? baseKms : maxAirportKms)) * 10) / 10,
-            extraKmRate,
-            waitingCharge,
-            waitingChargePerHour: waitingCharge,
-            waitingFreeMins: airportRule?.waitingFreeMins || 60,
-            nightAllowance,
-            isNightApplicable: isNight,
-            nightWindow: '11 pm till 6 am',
-            threshold,
-            advanceAmount,
-            advance: advanceAmount,
-            inclusions: [
-                `Fixed Airport Transfer Charges (${activeTier})`,
-                'Driver Allowance',
-                'Airport Assistance'
-            ],
-            exclusions: [
-                'Toll / State Tax',
-                'Parking Charges (as per actuals)',
-                'GST (5%)',
-                `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
-                `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`
-            ],
-            termsAndConditions: [
-                `0-${baseKms} km: fixed charges of ₹${baseFare}`,
-                `15-${maxAirportKms} km: fixed charges of ₹${fare15to25}`,
-                `Beyond ${maxAirportKms} km: charged at ₹${extraKmRate}/km (₹${activeFare})`,
-                `Waiting charges (after 60 mins of pickup time): ₹${waitingCharge}/hour`,
-                `Night driving allowances: ₹${nightAllowance}/- (Applicable once if ride time falls between 11 pm till 6 am)`,
-                `Threshold value: ₹${threshold} to confirm booking`
-            ]
-        };
-
-        const result = buildFareResult({
-            rawFare: calculatedBaseFare,
-            addonTotal,
-            appliedAddons,
-            multiplier,
-            details,
-            advanceType,
-            advanceValue,
-            appliedRule: airportRule?.id || airportRule?._id || `airport-${normalizedCarCategory}`,
-            ruleType: 'AirportPricing',
-            distance: currentDistance,
-            durationMinutes: mapRouteInfo?.durationMinutes
-        });
-
-        if (result) return result;
     }
 
     // ---------- Priority 1: Route‑Specific Pricing ----------
