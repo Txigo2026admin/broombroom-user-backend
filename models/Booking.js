@@ -69,6 +69,33 @@ const Booking = sequelize.define(
             allowNull: true
         },
 
+        petFriendly: {
+            type: DataTypes.BOOLEAN,
+            defaultValue: false
+        },
+
+        petCount: {
+            type: DataTypes.INTEGER,
+            defaultValue: 0
+        },
+
+        addons: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: {}
+        },
+
+        source: {
+            type: DataTypes.STRING,
+            defaultValue: 'BroomBoom Web'
+        },
+
+        searchDetails: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: {}
+        },
+
         // =====================================================
         // LOCATION
         // =====================================================
@@ -76,6 +103,21 @@ const Booking = sequelize.define(
         state: {
             type: DataTypes.STRING,
             allowNull: false
+        },
+
+        fromCity: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        toCity: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        duration: {
+            type: DataTypes.STRING,
+            allowNull: true
         },
 
         pincode: {

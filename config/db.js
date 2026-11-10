@@ -86,6 +86,17 @@ const connectDB = async () => {
                 ADD COLUMN IF NOT EXISTS "advanceType" VARCHAR(50) DEFAULT 'Percentage',
                 ADD COLUMN IF NOT EXISTS "advanceValue" FLOAT DEFAULT 20;
 
+                ALTER TABLE bookings
+                ADD COLUMN IF NOT EXISTS "fromCity" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "toCity" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "duration" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "petFriendly" BOOLEAN DEFAULT false,
+                ADD COLUMN IF NOT EXISTS "petCount" INTEGER DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS "addons" JSONB DEFAULT '{}'::jsonb,
+                ADD COLUMN IF NOT EXISTS "source" VARCHAR(100) DEFAULT 'BroomBoom Web',
+                ADD COLUMN IF NOT EXISTS "searchDetails" JSONB DEFAULT '{}'::jsonb,
+                ADD COLUMN IF NOT EXISTS "airportTerminal" VARCHAR(255);
+
                 DELETE FROM airport_pricings WHERE LOWER("carCategory") = 'hatchback';
                 DELETE FROM state_pricings WHERE LOWER("carCategory") = 'hatchback';
                 DELETE FROM car_categories WHERE LOWER("name") = 'hatchback';
