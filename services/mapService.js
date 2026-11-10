@@ -1,8 +1,9 @@
 const City = require('../models/City');
+const redisService = require('./redisService');
 
 const getOsrmUrl = () => process.env.OSRM_API_URL || 'https://router.project-osrm.org';
-const getNominatimUrl = () => process.env.NOMINATIM_API_URL || 'https://nominatim.openstreetmap.org';
-const getGoogleApiKey = () => process.env.GOOGLE_MAPS_API_KEY || 'AIzaSyBdAaSarc60pYSXzYE9o6OTVnF7PMGFsHs';
+const getNominatimUrl = () => process.env.NOMINATIM_URL || process.env.NOMINATIM_API_URL || 'https://nominatim.openstreetmap.org';
+const getGoogleApiKey = () => process.env.GOOGLE_MAPS_API_KEY;
 
 // Known aliases & common typos mapped to accurate canonical places
 const KNOWN_ALIASES = {
@@ -75,7 +76,7 @@ function expandStateAbbreviations(str) {
     return s;
 }
 
-// ---------- Haversine formula (curved road fallback) ----------
+// ---------- Haversine formula (straight-line fallback) ----------
 function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
     if (lat1 == null || lon1 == null || lat2 == null || lon2 == null) return 0;
     const R = 6371; // Earth radius in km
@@ -90,7 +91,7 @@ function calculateHaversineDistance(lat1, lon1, lat2, lon2) {
     return Math.round(R * c * roadFactor * 10) / 10;
 }
 
-// ---------- Helper to auto-store / cache place with lat & lon in PostgreSQL cities table ----------
+// ---------- Helper to auto-store / cache place in Database ----------
 async function saveOrUpdateCity({ name, displayName, lat, lon, state, country, placeId }) {
     if (!name || lat == null || lon == null) return null;
     try {
@@ -146,12 +147,11 @@ async function saveOrUpdateCity({ name, displayName, lat, lon, state, country, p
             placeId: strPlaceId || undefined
         });
     } catch (err) {
-        // Ignore duplicate / constraint collision silently
         return null;
     }
 }
 
-// ---------- Helper to parse address components from Google Places API (New) ----------
+// ---------- Helper to parse address components from Google Places API ----------
 function extractStateAndCountry(components = []) {
     let state = '';
     let country = 'India';
@@ -169,7 +169,7 @@ function extractStateAndCountry(components = []) {
     return { state, country };
 }
 
-// ---------- Driving route and distance via Google Routes API (New) ----------
+// ---------- Driving route and distance via Google Routes API ----------
 async function getGoogleDrivingDistance(pLat, pLng, dLat, dLng, originAddress, destAddress) {
     const apiKey = getGoogleApiKey();
     if (!apiKey) return null;
@@ -255,7 +255,7 @@ async function getGoogleDrivingDistance(pLat, pLng, dLat, dLng, originAddress, d
     return null;
 }
 
-// ---------- Google Places API (New) Text Search with Auto-Store ----------
+// ---------- Google Places API Text Search (Single Result) ----------
 async function searchGooglePlacesText(query) {
     const apiKey = getGoogleApiKey();
     if (!apiKey || !query) return null;
@@ -287,8 +287,8 @@ async function searchGooglePlacesText(query) {
                     const displayName = place.formattedAddress || place.displayName?.text || query;
                     const name = place.displayName?.text || query.split(',')[0].trim();
 
-                    // Auto-store in database
-                    await saveOrUpdateCity({
+                    // Asynchronously save to DB
+                    saveOrUpdateCity({
                         name,
                         displayName,
                         lat,
@@ -296,7 +296,7 @@ async function searchGooglePlacesText(query) {
                         state,
                         country,
                         placeId: place.id
-                    });
+                    }).catch(() => {});
 
                     return {
                         lat: parseFloat(lat),
@@ -315,110 +315,102 @@ async function searchGooglePlacesText(query) {
     return null;
 }
 
-// ---------- Google Places API (New) Autocomplete with Place Details & Auto DB-store ----------
-async function searchGooglePlacesAutocomplete(query, limit = 5) {
+// ---------- Google Places API Multi-Result Search for Micro & Small Locations ----------
+async function searchGooglePlaces(query, limit = 5) {
     const apiKey = getGoogleApiKey();
     if (!apiKey || !query) return [];
     try {
-        const url = 'https://places.googleapis.com/v1/places:autocomplete';
+        const url = 'https://places.googleapis.com/v1/places:searchText';
         const res = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'X-Goog-Api-Key': apiKey
+                'X-Goog-Api-Key': apiKey,
+                'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.addressComponents'
             },
             body: JSON.stringify({
-                input: query,
-                includedRegionCodes: ['in'],
-                languageCode: 'en'
+                textQuery: query,
+                regionCode: 'IN',
+                pageSize: limit
             }),
-            signal: AbortSignal.timeout(4000)
+            signal: AbortSignal.timeout(5000)
         });
 
         if (!res.ok) return [];
 
         const data = await res.json();
-        const suggestions = (data.suggestions || []).slice(0, limit);
-        if (suggestions.length === 0) return [];
+        const results = [];
+        for (const p of (data.places || [])) {
+            const lat = p.location?.latitude;
+            const lon = p.location?.longitude;
+            if (lat != null && lon != null) {
+                const { state, country } = extractStateAndCountry(p.addressComponents);
+                const name = p.displayName?.text || (p.formattedAddress || query).split(',')[0].trim();
+                const displayName = p.formattedAddress || name;
+                const placeId = p.id;
 
-        // Fetch details for predictions in parallel to get latitude & longitude
-        const detailPromises = suggestions.map(async (s) => {
-            const placeId = s.placePrediction?.placeId;
-            if (!placeId) return null;
+                const item = {
+                    name,
+                    displayName,
+                    lat: String(lat),
+                    lon: String(lon),
+                    state,
+                    country,
+                    placeId,
+                    source: 'GoogleMaps'
+                };
 
-            try {
-                const detailUrl = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`;
-                const dRes = await fetch(detailUrl, {
-                    headers: {
-                        'X-Goog-Api-Key': apiKey,
-                        'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,addressComponents'
-                    },
-                    signal: AbortSignal.timeout(4000)
-                });
-
-                if (dRes.ok) {
-                    const d = await dRes.json();
-                    const lat = d.location?.latitude;
-                    const lon = d.location?.longitude;
-                    if (lat != null && lon != null) {
-                        const { state, country } = extractStateAndCountry(d.addressComponents);
-                        const name = s.placePrediction.structuredFormat?.mainText?.text || d.displayName?.text || '';
-                        const displayName = d.formattedAddress || s.placePrediction.text?.text || name;
-
-                        // Auto-store in database
-                        await saveOrUpdateCity({
-                            name,
-                            displayName,
-                            lat,
-                            lon,
-                            state,
-                            country,
-                            placeId: d.id || placeId
-                        });
-
-                        return {
-                            name,
-                            displayName,
-                            lat: String(lat),
-                            lon: String(lon),
-                            state,
-                            country,
-                            placeId: d.id || placeId,
-                            source: 'GooglePlaces'
-                        };
-                    }
-                }
-            } catch (_) {}
-            return null;
-        });
-
-        const settled = await Promise.allSettled(detailPromises);
-        return settled
-            .filter(r => r.status === 'fulfilled' && r.value != null)
-            .map(r => r.value);
+                // Auto-cache to DB in background
+                saveOrUpdateCity(item).catch(() => {});
+                results.push(item);
+            }
+        }
+        return results;
     } catch (err) {
-        console.warn(`[MapService] Google Places autocomplete failed for "${query}":`, err.message);
+        console.warn(`[MapService] Google Places search failed for "${query}":`, err.message);
         return [];
     }
 }
 
-// ---------- Geocode address/city via DB or Nominatim ----------
+// Legacy alias maintained for existing callers
+async function searchGooglePlacesAutocomplete(query, limit = 5) {
+    return await searchGooglePlaces(query, limit);
+}
+
+// ---------- Geocode address/city via Redis -> DB (Stage 1) -> OSM (Stage 2) -> Google Places (Stage 3) ----------
 async function getCoordinates(query) {
     if (!query || typeof query !== 'string') return null;
     const cleanQuery = normalizeQuery(query);
     if (!cleanQuery) return null;
 
-    // Check alias first (e.g. "newtown" -> "New Town, Kolkata", "cahndan nagar" -> "Chandannagar")
+    // Check Redis / Memory cache first (< 1ms)
+    const geoCacheKey = `bb:map:geo:${cleanQuery.toLowerCase()}`;
+    const cachedGeo = await redisService.get(geoCacheKey);
+    if (cachedGeo && cachedGeo.lat != null && cachedGeo.lng != null) {
+        return {
+            ...cachedGeo,
+            source: `${cachedGeo.source} (RedisCached)`
+        };
+    }
+
+    const geoResult = await _resolveCoordinates(cleanQuery);
+    if (geoResult && geoResult.lat != null && geoResult.lng != null) {
+        // Cache in Redis for 7 days (604800s)
+        redisService.set(geoCacheKey, geoResult, 604800).catch(() => {});
+    }
+    return geoResult;
+}
+
+async function _resolveCoordinates(cleanQuery) {
     const aliased = resolveAlias(cleanQuery);
     const effectiveQuery = aliased || cleanQuery;
 
-    // 1. Try DB lookup
+    // Stage 1: Try Database lookup first
     try {
         const primaryName = effectiveQuery.split(',')[0].trim();
         const escapedFull = effectiveQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escapedPrimary = primaryName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-        // Check if query is "newtown" specifically - make sure it returns New Town Kolkata
         if (/^new\s*town$/i.test(cleanQuery) || /^new\s*town$/i.test(effectiveQuery)) {
             const kolkataNewTown = await City.findOne({
                 name: { $regex: /^new town$/i },
@@ -464,13 +456,12 @@ async function getCoordinates(query) {
         console.warn('[MapService] DB city lookup warning:', dbErr.message);
     }
 
-    // 2. Query Nominatim OpenStreetMap API
+    // Stage 2: OpenStreetMap (Nominatim API)
     const queriesToTry = [effectiveQuery];
     if (aliased && aliased !== cleanQuery) {
         queriesToTry.push(cleanQuery);
     }
 
-    // Check if query is a 6-digit Indian PIN code
     const pinMatch = cleanQuery.match(/\b([1-9][0-9]{5})\b/);
     if (pinMatch) {
         queriesToTry.push(pinMatch[1]);
@@ -495,7 +486,6 @@ async function getCoordinates(query) {
             if (res.ok) {
                 const data = await res.json();
                 if (Array.isArray(data) && data.length > 0) {
-                    // Pick the most relevant result (filter out distant Islampur if user asked for newtown)
                     let item = data[0];
                     if (/^new\s*town/i.test(cleanQuery)) {
                         const kolkataItem = data.find(d => /kolkata|rajarhat|24 parganas/i.test(d.display_name));
@@ -506,10 +496,9 @@ async function getCoordinates(query) {
                     const lng = parseFloat(item.lon);
                     const detectedState = item.address?.state || '';
 
-                    // Cache in City table with auto-store helper
                     try {
                         const primaryName = q.split(',')[0].trim();
-                        await saveOrUpdateCity({
+                        saveOrUpdateCity({
                             name: primaryName,
                             displayName: item.display_name,
                             lat,
@@ -517,7 +506,7 @@ async function getCoordinates(query) {
                             state: detectedState,
                             country: item.address?.country || 'India',
                             placeId: item.place_id ? String(item.place_id) : undefined
-                        });
+                        }).catch(() => {});
                     } catch (_) {}
 
                     return {
@@ -530,21 +519,21 @@ async function getCoordinates(query) {
                 }
             }
         } catch (apiErr) {
-            console.warn(`[MapService] Nominatim geocoding failed for "${q}":`, apiErr.message);
+            console.warn(`[MapService] Nominatim fallback failed for "${q}":`, apiErr.message);
         }
     }
 
-    // 3. Fallback to Google Places Text Search (New) with Auto-Store
+    // Stage 3: Google Maps (Google Places Text Search - if DB and OSM fail)
     try {
         const googleGeo = await searchGooglePlacesText(effectiveQuery) || (aliased ? await searchGooglePlacesText(cleanQuery) : null);
         if (googleGeo && googleGeo.lat != null && googleGeo.lng != null) {
             return googleGeo;
         }
     } catch (gErr) {
-        console.warn(`[MapService] Google Places geocoding fallback failed for "${effectiveQuery}":`, gErr.message);
+        console.warn(`[MapService] Google Places geocoding failed for "${effectiveQuery}":`, gErr.message);
     }
 
-    // 4. Progressive Hierarchical Fallback for Detailed Home Addresses (e.g. "nanda,singur,hooghly,wb")
+    // Stage 4: Progressive Hierarchical Fallback for Detailed Addresses
     const expandedAddress = expandStateAbbreviations(cleanQuery);
     const addressTokens = expandedAddress.split(',').map(p => p.trim()).filter(Boolean);
 
@@ -570,20 +559,61 @@ async function getCoordinates(query) {
     return null;
 }
 
-// ---------- Autocomplete / Place Search for Search Bar ----------
+// ---------- 3-Stage Autocomplete / Location Search (Redis -> DB -> OSM -> Google Maps) ----------
 async function searchLocations(query) {
     if (!query || typeof query !== 'string') return [];
     const cleanQuery = normalizeQuery(query);
     if (cleanQuery.length < 2) return [];
 
+    // 0. Check Redis / in-memory cache first (< 1ms)
+    const searchCacheKey = `bb:map:search:${cleanQuery.toLowerCase()}`;
+    const cachedResults = await redisService.get(searchCacheKey);
+    if (Array.isArray(cachedResults) && cachedResults.length > 0) {
+        return cachedResults;
+    }
+
     const results = [];
     const seenIds = new Set();
+    const seenNames = new Set();
 
-    // 1. Check alias (e.g., "cahndan nagar" -> "Chandannagar, Hooghly")
     const aliased = resolveAlias(cleanQuery);
     const searchQuery = aliased || cleanQuery;
 
-    // 2. Search Database first (local, instantaneous)
+    // Helper to safely add results and avoid duplicates
+    function addResult(item) {
+        if (!item || !item.lat || !item.lon) return false;
+        const latNum = parseFloat(item.lat);
+        const lonNum = parseFloat(item.lon);
+        if (isNaN(latNum) || isNaN(lonNum)) return false;
+
+        // Check duplicate by placeId
+        if (item.placeId && seenIds.has(String(item.placeId))) return false;
+
+        // Check duplicate by normalized name
+        const normName = String(item.name || '').trim().toLowerCase();
+        if (normName && seenNames.has(normName)) {
+            // Check if coordinates are also close (< 500m)
+            for (const r of results) {
+                const d = calculateHaversineDistance(latNum, lonNum, parseFloat(r.lat), parseFloat(r.lon));
+                if (d < 0.5) return false;
+            }
+        }
+
+        // Check proximity with existing results (within 100 meters)
+        for (const r of results) {
+            const d = calculateHaversineDistance(latNum, lonNum, parseFloat(r.lat), parseFloat(r.lon));
+            if (d < 0.1) return false;
+        }
+
+        if (item.placeId) seenIds.add(String(item.placeId));
+        if (normName) seenNames.add(normName);
+        results.push(item);
+        return true;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 1: Search Local Database (City collection / cached places)
+    // ─────────────────────────────────────────────────────────────
     try {
         const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const dbCities = await City.find({
@@ -591,117 +621,119 @@ async function searchLocations(query) {
                 { name: { $regex: new RegExp(escaped, 'i') } },
                 { displayName: { $regex: new RegExp(escaped, 'i') } }
             ]
-        }).limit(5);
+        }).limit(6);
 
         for (const c of dbCities) {
-            const key = `${c.name}_${c.lat}_${c.lon}`;
-            if (!seenIds.has(key)) {
-                seenIds.add(key);
-                results.push({
-                    name: c.name,
-                    displayName: c.displayName || c.name,
-                    lat: String(c.lat),
-                    lon: String(c.lon),
-                    state: c.state || '',
-                    country: c.country || 'India',
-                    placeId: c.placeId || c.id,
-                    source: 'Database'
-                });
-            }
+            addResult({
+                name: c.name,
+                displayName: c.displayName || c.name,
+                lat: String(c.lat),
+                lon: String(c.lon),
+                state: c.state || '',
+                country: c.country || 'India',
+                placeId: c.placeId || c.id,
+                source: 'Database'
+            });
         }
     } catch (e) {
         console.warn('[MapService] DB search error:', e.message);
     }
 
-    // 3. Search Google Places API (New) Autocomplete with details & auto-store into DB
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 2: OpenStreetMap (Nominatim API)
+    // ─────────────────────────────────────────────────────────────
+    let osmResultsCount = 0;
     try {
-        const googleResults = await searchGooglePlacesAutocomplete(searchQuery, 5);
-        for (const item of googleResults) {
-            const key = `${item.placeId || item.lat + '_' + item.lon}`;
-            if (!seenIds.has(key)) {
-                seenIds.add(key);
-                results.push(item);
-            }
-        }
-    } catch (e) {
-        console.warn('[MapService] Google Places autocomplete error:', e.message);
-    }
+        const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
+        const queries = [searchQuery];
+        if (searchQuery !== cleanQuery) queries.push(cleanQuery);
 
-    // 4. Search Nominatim OpenStreetMap (supports PIN codes, addresses, small areas)
-    if (results.length < 6) {
-        try {
-            const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
-            const queries = [searchQuery];
-            if (searchQuery !== cleanQuery) queries.push(cleanQuery);
+        for (const q of queries) {
+            const nomUrl = getNominatimUrl();
+            const url = isPin
+                ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=6`
+                : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
 
-            for (const q of queries) {
-                const nomUrl = getNominatimUrl();
-                const url = isPin
-                    ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=6`
-                    : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
+            const res = await fetch(url, {
+                headers: {
+                    'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
+                    'Accept': 'application/json'
+                },
+                signal: AbortSignal.timeout(4000)
+            });
 
-                const res = await fetch(url, {
-                    headers: {
-                        'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
-                        'Accept': 'application/json'
-                    },
-                    signal: AbortSignal.timeout(4000)
-                });
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    for (const item of data) {
+                        if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
+                            continue;
+                        }
 
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        for (const item of data) {
-                            // Skip Islampur if user searched for newtown
-                            if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
-                                continue;
-                            }
+                        const parts = (item.display_name || '').split(',');
+                        const primary = (parts[0] || '').trim();
+                        const secondary = parts.length > 1 ? parts[1].trim() : '';
+                        const cleanTitle = secondary && secondary.length < 25
+                            ? `${primary}, ${secondary}`
+                            : primary;
 
-                            const key = `${item.place_id || item.lat + '_' + item.lon}`;
-                            if (!seenIds.has(key)) {
-                                seenIds.add(key);
+                        const added = addResult({
+                            name: cleanTitle,
+                            displayName: item.display_name,
+                            lat: String(item.lat),
+                            lon: String(item.lon),
+                            state: item.address?.state || '',
+                            country: item.address?.country || 'India',
+                            placeId: item.place_id ? String(item.place_id) : undefined,
+                            source: 'OpenStreetMap'
+                        });
 
-                                // Format clean title
-                                const parts = (item.display_name || '').split(',');
-                                const primary = (parts[0] || '').trim();
-                                const secondary = parts.length > 1 ? parts[1].trim() : '';
-                                const cleanTitle = secondary && secondary.length < 25
-                                    ? `${primary}, ${secondary}`
-                                    : primary;
-
-                                // Auto-store entered/suggested Nominatim place into DB
-                                await saveOrUpdateCity({
-                                    name: cleanTitle,
-                                    displayName: item.display_name,
-                                    lat: item.lat,
-                                    lon: item.lon,
-                                    state: item.address?.state || '',
-                                    country: item.address?.country || 'India',
-                                    placeId: item.place_id ? String(item.place_id) : undefined
-                                });
-
-                                results.push({
-                                    name: cleanTitle,
-                                    displayName: item.display_name,
-                                    lat: String(item.lat),
-                                    lon: String(item.lon),
-                                    state: item.address?.state || '',
-                                    country: item.address?.country || 'India',
-                                    placeId: item.place_id ? String(item.place_id) : undefined,
-                                    source: 'Nominatim'
-                                });
-                            }
+                        if (added) {
+                            osmResultsCount++;
+                            // Asynchronously cache in DB
+                            saveOrUpdateCity({
+                                name: cleanTitle,
+                                displayName: item.display_name,
+                                lat: item.lat,
+                                lon: item.lon,
+                                state: item.address?.state || '',
+                                country: item.address?.country || 'India',
+                                placeId: item.place_id ? String(item.place_id) : undefined
+                            }).catch(() => {});
                         }
                     }
                 }
-                if (results.length >= 6) break;
             }
-        } catch (e) {
-            console.warn('[MapService] Nominatim search error:', e.message);
+            if (results.length >= 8) break;
+        }
+    } catch (e) {
+        console.warn('[MapService] Nominatim stage error:', e.message);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 3: Google Maps (Google Places API - Micro & Small Locations)
+    // Runs if:
+    // 1) Results are sparse (< 4 results), OR
+    // 2) OpenStreetMap returned 0 results, OR
+    // 3) Query contains keywords typical of micro-localities, societies,
+    //    commercial complexes, restaurants, clinics, gates, or street landmarks.
+    // ─────────────────────────────────────────────────────────────
+    const isMicroLocationQuery = /(society|complex|apartment|tower|heights|enclave|vihar|nagar|colony|road|rd|street|lane|gali|block|sector|sec|gate|terminal|airport|station|railway|mall|bazar|market|hospital|clinic|hotel|restaurant|cafe|dhaba|bhavan|bhawan|building|residency|resort|park|garden|cross|stand|bridge|chowk|para)/i.test(cleanQuery);
+
+    if (results.length < 5 || osmResultsCount === 0 || isMicroLocationQuery) {
+        try {
+            const googleResults = await searchGooglePlaces(searchQuery, 5);
+            for (const place of googleResults) {
+                addResult(place);
+            }
+        } catch (gErr) {
+            console.warn('[MapService] Google Places stage error:', gErr.message);
         }
     }
 
-    // 5. Hierarchical fallback for detailed home addresses if no direct match
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 4: Hierarchical fallback for detailed multi-part home addresses
+    // ─────────────────────────────────────────────────────────────
     if (results.length === 0) {
         const expandedAddress = expandStateAbbreviations(cleanQuery);
         const addressTokens = expandedAddress.split(',').map(p => p.trim()).filter(Boolean);
@@ -715,7 +747,7 @@ async function searchLocations(query) {
                 if (subResults && subResults.length > 0) {
                     const prefix = addressTokens.slice(0, i).join(', ');
                     for (const item of subResults) {
-                        results.push({
+                        addResult({
                             name: `${prefix}, ${item.name}`,
                             displayName: `${prefix}, ${item.displayName}`,
                             lat: item.lat,
@@ -732,10 +764,15 @@ async function searchLocations(query) {
         }
     }
 
-    return results;
+    const finalResults = results.slice(0, 8);
+    if (finalResults.length > 0) {
+        // Cache in Redis for 24 hours (86400s)
+        redisService.set(searchCacheKey, finalResults, 86400).catch(() => {});
+    }
+    return finalResults;
 }
 
-// ---------- Driving route and distance via OSRM with Google Routes fallback ----------
+// ---------- Driving route and distance via Google Routes directly with OSRM fallback & Redis ----------
 async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
     const pLat = parseFloat(lat1);
     const pLng = parseFloat(lon1);
@@ -746,7 +783,6 @@ async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
         return null;
     }
 
-    // Same location check
     if (Math.abs(pLat - dLat) < 0.0001 && Math.abs(pLng - dLng) < 0.0001) {
         return {
             distanceKm: 0,
@@ -755,7 +791,29 @@ async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
         };
     }
 
-    // 1. Try OpenStreetMap (OSRM) first
+    // Check Redis / Memory cache for driving route (< 1ms)
+    const distCacheKey = `bb:map:dist:${pLat.toFixed(4)},${pLng.toFixed(4)}:${dLat.toFixed(4)},${dLng.toFixed(4)}`;
+    const cachedDist = await redisService.get(distCacheKey);
+    if (cachedDist && cachedDist.distanceKm !== undefined) {
+        return {
+            ...cachedDist,
+            source: `${cachedDist.source} (RedisCached)`
+        };
+    }
+
+    // 1. Google Maps Routes API directly
+    try {
+        const googleRoute = await getGoogleDrivingDistance(pLat, pLng, dLat, dLng);
+        if (googleRoute && googleRoute.distanceKm > 0) {
+            // Cache in Redis for 14 days (1209600s)
+            redisService.set(distCacheKey, googleRoute, 1209600).catch(() => {});
+            return googleRoute;
+        }
+    } catch (gErr) {
+        console.warn('[MapService] Google Routes API failed, attempting OSRM fallback:', gErr.message);
+    }
+
+    // 2. OpenStreetMap (OSRM) Fallback only if Google Routes fails
     try {
         const url = `${getOsrmUrl()}/route/v1/driving/${pLng},${pLat};${dLng},${dLat}?overview=false`;
         const res = await fetch(url, {
@@ -771,32 +829,25 @@ async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
                 const durationMinutes = Math.round(route.duration / 60);
 
                 if (distanceKm > 0) {
-                    return {
+                    const routeData = {
                         distanceKm,
                         durationMinutes,
                         source: 'OSRM'
                     };
+                    // Cache in Redis for 14 days (1209600s)
+                    redisService.set(distCacheKey, routeData, 1209600).catch(() => {});
+                    return routeData;
                 }
             }
         }
     } catch (osrmErr) {
-        console.warn('[MapService] OSRM route calculation failed, falling back to Google Maps:', osrmErr.message);
-    }
-
-    // 2. OpenStreetMap failed -> Fallback to Google Maps Routes API (New)
-    try {
-        const googleRoute = await getGoogleDrivingDistance(pLat, pLng, dLat, dLng);
-        if (googleRoute && googleRoute.distanceKm > 0) {
-            return googleRoute;
-        }
-    } catch (gErr) {
-        console.warn('[MapService] Google Maps route fallback failed:', gErr.message);
+        console.warn('[MapService] OSRM fallback failed:', osrmErr.message);
     }
 
     return null;
 }
 
-// ---------- Combined: Get distance between two points (cities or coords) ----------
+// ---------- Combined: Get distance between two points ----------
 async function calculateDistanceBetween({
     from,
     to,
@@ -813,7 +864,6 @@ async function calculateDistanceBetween({
     let pickupAddress = null;
     let dropAddress = null;
 
-    // Resolve pickup coords and address if coordinates are missing
     if ((pLat === null || pLng === null || isNaN(pLat) || isNaN(pLng)) && from) {
         const geo = await getCoordinates(from);
         if (geo) {
@@ -823,7 +873,6 @@ async function calculateDistanceBetween({
         }
     }
 
-    // Resolve drop coords and address if coordinates are missing
     if ((dLat === null || dLng === null || isNaN(dLat) || isNaN(dLng)) && to) {
         const geo = await getCoordinates(to);
         if (geo) {
@@ -833,7 +882,7 @@ async function calculateDistanceBetween({
         }
     }
 
-    // 1. If coordinates resolved -> try driving distance (OSRM then Google Maps)
+    // 1. Driving route calculation (Google Routes first)
     if (pLat != null && pLng != null && dLat != null && dLng != null) {
         const routeData = await getDrivingDistanceByCoords(pLat, pLng, dLat, dLng);
         if (routeData) {
@@ -847,7 +896,7 @@ async function calculateDistanceBetween({
                 dropAddress
             };
         }
-        // Both OSRM and Google coordinate routing failed – use Haversine straight-line fallback
+
         const fallbackKm = calculateHaversineDistance(pLat, pLng, dLat, dLng);
         return {
             distanceKm: fallbackKm,
@@ -860,7 +909,7 @@ async function calculateDistanceBetween({
         };
     }
 
-    // 2. If coordinates could not be resolved from text, try Google Routes directly with address strings
+    // 2. If coordinates could not be resolved from text, fallback to Google Routes with address strings
     if (from && to) {
         const googleRoute = await getGoogleDrivingDistance(null, null, null, null, from, to);
         if (googleRoute && googleRoute.distanceKm > 0) {
@@ -896,5 +945,6 @@ module.exports = {
     resolveAlias,
     saveOrUpdateCity,
     getGoogleDrivingDistance,
-    searchGooglePlacesAutocomplete
+    searchGooglePlacesAutocomplete,
+    redisService
 };

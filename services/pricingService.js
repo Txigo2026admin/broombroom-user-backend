@@ -1061,34 +1061,51 @@ async function calculatePrice({
             // Roundtrip Slabs (0-50 km, 51-100 km, 101-150 km, 151-200 km, 201-4000 km)
             let slab = '0-50 km';
             let slabRate = ratePerKm;
+            const defaultHourly = safePositive(stateRule.hourlyRate, 100);
+            let slabHourlyRate = defaultHourly;
 
             if (resolvedDistance <= 50) {
                 slab = '0-50 km';
                 if (stateRule.rate0to50 != null) slabRate = safeNumber(stateRule.rate0to50, ratePerKm);
                 else if (stateRule.slabRates?.['0-50 km'] != null) slabRate = safeNumber(stateRule.slabRates['0-50 km'], ratePerKm);
+
+                if (stateRule.hourly0to50 != null) slabHourlyRate = safeNumber(stateRule.hourly0to50, defaultHourly);
+                else if (stateRule.hourlySlabs?.['0-50 km'] != null) slabHourlyRate = safeNumber(stateRule.hourlySlabs['0-50 km'], defaultHourly);
             } else if (resolvedDistance <= 100) {
                 slab = '51-100 km';
                 if (stateRule.rate51to100 != null) slabRate = safeNumber(stateRule.rate51to100, ratePerKm);
                 else if (stateRule.slabRates?.['51-100 km'] != null) slabRate = safeNumber(stateRule.slabRates['51-100 km'], ratePerKm);
+
+                if (stateRule.hourly51to100 != null) slabHourlyRate = safeNumber(stateRule.hourly51to100, defaultHourly);
+                else if (stateRule.hourlySlabs?.['51-100 km'] != null) slabHourlyRate = safeNumber(stateRule.hourlySlabs['51-100 km'], defaultHourly);
             } else if (resolvedDistance <= 150) {
                 slab = '101-150 km';
                 if (stateRule.rate101to150 != null) slabRate = safeNumber(stateRule.rate101to150, ratePerKm);
                 else if (stateRule.slabRates?.['101-150 km'] != null) slabRate = safeNumber(stateRule.slabRates['101-150 km'], ratePerKm);
+
+                if (stateRule.hourly101to150 != null) slabHourlyRate = safeNumber(stateRule.hourly101to150, defaultHourly);
+                else if (stateRule.hourlySlabs?.['101-150 km'] != null) slabHourlyRate = safeNumber(stateRule.hourlySlabs['101-150 km'], defaultHourly);
             } else if (resolvedDistance <= 200) {
                 slab = '151-200 km';
                 if (stateRule.rate151to200 != null) slabRate = safeNumber(stateRule.rate151to200, ratePerKm);
                 else if (stateRule.slabRates?.['151-200 km'] != null) slabRate = safeNumber(stateRule.slabRates['151-200 km'], ratePerKm);
+
+                if (stateRule.hourly151to200 != null) slabHourlyRate = safeNumber(stateRule.hourly151to200, defaultHourly);
+                else if (stateRule.hourlySlabs?.['151-200 km'] != null) slabHourlyRate = safeNumber(stateRule.hourlySlabs['151-200 km'], defaultHourly);
             } else {
                 slab = '201-4000 km';
                 if (stateRule.rate201to4000 != null) slabRate = safeNumber(stateRule.rate201to4000, ratePerKm);
                 else if (stateRule.slabRates?.['201-4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['201-4000 km'], ratePerKm);
                 else if (stateRule.slabRates?.['Upto 4000 km'] != null) slabRate = safeNumber(stateRule.slabRates['Upto 4000 km'], ratePerKm);
+
+                if (stateRule.hourly201to4000 != null) slabHourlyRate = safeNumber(stateRule.hourly201to4000, defaultHourly);
+                else if (stateRule.hourlySlabs?.['201-4000 km'] != null) slabHourlyRate = safeNumber(stateRule.hourlySlabs['201-4000 km'], defaultHourly);
             }
 
             // Price 1: Distance fare = Total round-trip distance × rate for slab containing total round-trip distance
             const distanceFare = Math.round(resolvedDistance * slabRate);
 
-            // Price 2: Hourly fare = Total billable booking hours × applicable admin hourly rate
+            // Price 2: Hourly fare = Total billable booking hours × distance slab-wise hourly rate
             let totalHours = 0;
             const explicitHours = safeNumber(bookingDuration ?? durationHours ?? hours, 0);
             if (explicitHours > 0) {
@@ -1106,7 +1123,7 @@ async function calculatePrice({
                 }
             }
 
-            const activeHourlyRate = safePositive(stateRule.hourlyRate, 100);
+            const activeHourlyRate = slabHourlyRate;
             const hourlyFare = Math.round(totalHours * activeHourlyRate);
 
             // Price 3: Admin-set price = applicable minimum or fixed base price configured in admin panel
@@ -1140,6 +1157,7 @@ async function calculatePrice({
                 extraKmCharges: 0,
                 totalHours,
                 hourlyRate: activeHourlyRate,
+                slabHourlyRate: activeHourlyRate,
                 hourlyFare,
                 adminSetPrice,
                 threshold: adminSetPrice,
@@ -1313,16 +1331,22 @@ async function calculatePrice({
         });
     } else if (normalizedRideType === 'Roundtrip') {
         let slab = '0-50 km';
+        let fallbackHourlyRate = 160;
         if (resolvedDistance <= 50) {
             slab = '0-50 km';
+            fallbackHourlyRate = 160;
         } else if (resolvedDistance <= 100) {
             slab = '51-100 km';
+            fallbackHourlyRate = 150;
         } else if (resolvedDistance <= 150) {
             slab = '101-150 km';
+            fallbackHourlyRate = 140;
         } else if (resolvedDistance <= 200) {
             slab = '151-200 km';
+            fallbackHourlyRate = 130;
         } else {
             slab = '201-4000 km';
+            fallbackHourlyRate = 120;
         }
 
         distanceFare = Math.round(resolvedDistance * perKmRate);
@@ -1343,7 +1367,7 @@ async function calculatePrice({
             }
         }
 
-        const activeHourlyRate = 100;
+        const activeHourlyRate = fallbackHourlyRate;
         const hourlyFare = Math.round(totalHours * activeHourlyRate);
         const adminSetPrice = 1000;
 
@@ -1358,6 +1382,7 @@ async function calculatePrice({
             distanceFare,
             totalHours,
             hourlyRate: activeHourlyRate,
+            slabHourlyRate: activeHourlyRate,
             hourlyFare,
             adminSetPrice,
             threshold: adminSetPrice,

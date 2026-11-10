@@ -115,6 +115,36 @@ const StatePricing = sequelize.define('StatePricing', {
         allowNull: true,
         defaultValue: null
     },
+    hourly0to50: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    hourly51to100: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    hourly101to150: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    hourly151to200: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    hourly201to4000: {
+        type: DataTypes.FLOAT,
+        allowNull: true,
+        defaultValue: null
+    },
+    hourlySlabs: {
+        type: DataTypes.JSONB,
+        allowNull: true,
+        defaultValue: null
+    },
     advanceType: {
         type: DataTypes.STRING,
         defaultValue: 'Percentage'

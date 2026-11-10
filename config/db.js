@@ -77,6 +77,12 @@ const connectDB = async () => {
                 ADD COLUMN IF NOT EXISTS "rate151to200" FLOAT,
                 ADD COLUMN IF NOT EXISTS "rate201to4000" FLOAT,
                 ADD COLUMN IF NOT EXISTS "slabRates" JSONB,
+                ADD COLUMN IF NOT EXISTS "hourly0to50" FLOAT,
+                ADD COLUMN IF NOT EXISTS "hourly51to100" FLOAT,
+                ADD COLUMN IF NOT EXISTS "hourly101to150" FLOAT,
+                ADD COLUMN IF NOT EXISTS "hourly151to200" FLOAT,
+                ADD COLUMN IF NOT EXISTS "hourly201to4000" FLOAT,
+                ADD COLUMN IF NOT EXISTS "hourlySlabs" JSONB,
                 ADD COLUMN IF NOT EXISTS "advanceType" VARCHAR(50) DEFAULT 'Percentage',
                 ADD COLUMN IF NOT EXISTS "advanceValue" FLOAT DEFAULT 20;
 

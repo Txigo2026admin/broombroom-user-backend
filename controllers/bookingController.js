@@ -1,5 +1,7 @@
 const { Op } = require('sequelize');
 const Booking = require('../models/Booking');
+const { syncToVendorOrders } = require('../services/vendorDispatchBridge');
+const mapService = require('../services/mapService');
 
 // @desc    Get all bookings
 // @route   GET /api/bookings
@@ -16,7 +18,56 @@ exports.getBookings = async (req, res) => {
 // @route   POST /api/bookings
 exports.createBooking = async (req, res) => {
     try {
-        const booking = await Booking.create(req.body);
+        const bookingData = { ...req.body };
+
+        // Ensure pickup coordinates are resolved and stored
+        if ((!bookingData.pickupLat || !bookingData.pickupLng) && bookingData.pickupAddress) {
+            try {
+                const geo = await mapService.getCoordinates(bookingData.pickupAddress);
+                if (geo && geo.lat != null && geo.lng != null) {
+                    bookingData.pickupLat = String(geo.lat);
+                    bookingData.pickupLng = String(geo.lng);
+                }
+            } catch (_) {}
+        }
+
+        // Ensure drop coordinates are resolved and stored
+        if ((!bookingData.dropLat || !bookingData.dropLng) && bookingData.dropAddress) {
+            try {
+                const geo = await mapService.getCoordinates(bookingData.dropAddress);
+                if (geo && geo.lat != null && geo.lng != null) {
+                    bookingData.dropLat = String(geo.lat);
+                    bookingData.dropLng = String(geo.lng);
+                }
+            } catch (_) {}
+        }
+
+        // Auto-cache pickup & drop places with coordinates into cities table
+        if (bookingData.pickupAddress && bookingData.pickupLat && bookingData.pickupLng) {
+            try {
+                await mapService.saveOrUpdateCity({
+                    name: bookingData.pickupAddress.split(',')[0].trim(),
+                    displayName: bookingData.pickupAddress,
+                    lat: bookingData.pickupLat,
+                    lon: bookingData.pickupLng,
+                    state: bookingData.state || ''
+                });
+            } catch (_) {}
+        }
+
+        if (bookingData.dropAddress && bookingData.dropLat && bookingData.dropLng) {
+            try {
+                await mapService.saveOrUpdateCity({
+                    name: bookingData.dropAddress.split(',')[0].trim(),
+                    displayName: bookingData.dropAddress,
+                    lat: bookingData.dropLat,
+                    lon: bookingData.dropLng,
+                    state: bookingData.state || ''
+                });
+            } catch (_) {}
+        }
+
+        const booking = await Booking.create(bookingData);
 
         // Auto-sync customer as a User Lead in `users` table
         if (req.body.customerMobile) {
@@ -64,6 +115,13 @@ exports.createBooking = async (req, res) => {
             } catch (syncErr) {
                 console.warn('Booking lead auto-sync notice:', syncErr.message);
             }
+        }
+
+        // Auto-sync booking to Vendor Portal & Database Pincode-Wise & Plan-Wise
+        try {
+            await syncToVendorOrders(req.body, req.headers);
+        } catch (vendorSyncErr) {
+            console.warn('[VENDOR SYNC EXCEPTION NOTICE]:', vendorSyncErr.message);
         }
 
         res.status(201).json(booking);

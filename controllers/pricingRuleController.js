@@ -333,13 +333,49 @@ const DEFAULT_OUTSTATION_SEEDS = [
     { city: 'Default', state: 'Default', rideCategory: 'Oneway', carCategory: '17 Seater Traveller', seater: 17, ratePerKm: 34.0, extraKmRate: 36, threshold: 1500, waitingChargePerHour: 400, waitingFreeMins: 60, nightAllowance: 500, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
     { city: 'Default', state: 'Default', rideCategory: 'Oneway', carCategory: '25 Seater Traveller', seater: 25, ratePerKm: 42.0, extraKmRate: 45, threshold: 2000, waitingChargePerHour: 500, waitingFreeMins: 60, nightAllowance: 600, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
 
-    // Roundtrip Default Seeds (Threshold 1000, HourlyRate 100-150)
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'Sedan', seater: 4, ratePerKm: 12.0, extraKmRate: 14.0, hourlyRate: 100, threshold: 1000, waitingChargePerHour: 150, waitingFreeMins: 60, nightAllowance: 250, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'SUV', seater: 6, ratePerKm: 16.0, extraKmRate: 18.0, hourlyRate: 150, threshold: 1200, waitingChargePerHour: 200, waitingFreeMins: 60, nightAllowance: 300, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'SUV+', seater: 7, ratePerKm: 19.0, extraKmRate: 21.0, hourlyRate: 180, threshold: 1400, waitingChargePerHour: 250, waitingFreeMins: 60, nightAllowance: 350, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '13 Seater Traveller', seater: 13, ratePerKm: 30.0, extraKmRate: 32.0, hourlyRate: 250, threshold: 1800, waitingChargePerHour: 350, waitingFreeMins: 60, nightAllowance: 450, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '17 Seater Traveller', seater: 17, ratePerKm: 36.0, extraKmRate: 38.0, hourlyRate: 300, threshold: 2200, waitingChargePerHour: 400, waitingFreeMins: 60, nightAllowance: 500, nightStartHour: 23, nightEndHour: 6, status: 'Active' },
-    { city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '25 Seater Traveller', seater: 25, ratePerKm: 45.0, extraKmRate: 48.0, hourlyRate: 350, threshold: 2600, waitingChargePerHour: 500, waitingFreeMins: 60, nightAllowance: 600, nightStartHour: 23, nightEndHour: 6, status: 'Active' }
+    // Roundtrip Default Seeds (Threshold 1000, HourlyRate 100-150, Distance Slab Rates & Hourly Slabs)
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'Sedan', seater: 4, 
+        ratePerKm: 12.0, extraKmRate: 14.0, hourlyRate: 120, threshold: 1000, 
+        rate0to50: 15.0, rate51to100: 14.0, rate101to150: 13.0, rate151to200: 12.5, rate201to4000: 12.0,
+        hourly0to50: 160, hourly51to100: 150, hourly101to150: 140, hourly151to200: 130, hourly201to4000: 120,
+        waitingChargePerHour: 150, waitingFreeMins: 60, nightAllowance: 250, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    },
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'SUV', seater: 6, 
+        ratePerKm: 16.0, extraKmRate: 18.0, hourlyRate: 150, threshold: 1200, 
+        rate0to50: 20.0, rate51to100: 18.5, rate101to150: 17.5, rate151to200: 16.5, rate201to4000: 16.0,
+        hourly0to50: 200, hourly51to100: 185, hourly101to150: 175, hourly151to200: 165, hourly201to4000: 150,
+        waitingChargePerHour: 200, waitingFreeMins: 60, nightAllowance: 300, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    },
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: 'SUV+', seater: 7, 
+        ratePerKm: 19.0, extraKmRate: 21.0, hourlyRate: 180, threshold: 1400, 
+        rate0to50: 24.0, rate51to100: 22.0, rate101to150: 20.5, rate151to200: 19.5, rate201to4000: 19.0,
+        hourly0to50: 240, hourly51to100: 220, hourly101to150: 205, hourly151to200: 195, hourly201to4000: 180,
+        waitingChargePerHour: 250, waitingFreeMins: 60, nightAllowance: 350, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    },
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '13 Seater Traveller', seater: 13, 
+        ratePerKm: 30.0, extraKmRate: 32.0, hourlyRate: 250, threshold: 1800, 
+        rate0to50: 35.0, rate51to100: 33.0, rate101to150: 32.0, rate151to200: 31.0, rate201to4000: 30.0,
+        hourly0to50: 320, hourly51to100: 300, hourly101to150: 285, hourly151to200: 270, hourly201to4000: 250,
+        waitingChargePerHour: 350, waitingFreeMins: 60, nightAllowance: 450, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    },
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '17 Seater Traveller', seater: 17, 
+        ratePerKm: 36.0, extraKmRate: 38.0, hourlyRate: 300, threshold: 2200, 
+        rate0to50: 42.0, rate51to100: 39.0, rate101to150: 38.0, rate151to200: 37.0, rate201to4000: 36.0,
+        hourly0to50: 380, hourly51to100: 360, hourly101to150: 340, hourly151to200: 320, hourly201to4000: 300,
+        waitingChargePerHour: 400, waitingFreeMins: 60, nightAllowance: 500, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    },
+    { 
+        city: 'Default', state: 'Default', rideCategory: 'Roundtrip', carCategory: '25 Seater Traveller', seater: 25, 
+        ratePerKm: 45.0, extraKmRate: 48.0, hourlyRate: 350, threshold: 2600, 
+        rate0to50: 52.0, rate51to100: 49.0, rate101to150: 47.5, rate151to200: 46.0, rate201to4000: 45.0,
+        hourly0to50: 450, hourly51to100: 420, hourly101to150: 400, hourly151to200: 380, hourly201to4000: 350,
+        waitingChargePerHour: 500, waitingFreeMins: 60, nightAllowance: 600, nightStartHour: 23, nightEndHour: 6, status: 'Active' 
+    }
 ];
 
 async function ensureOutstationSeeds() {
@@ -355,6 +391,19 @@ async function ensureOutstationSeeds() {
             });
             if (!existing) {
                 await StatePricing.create(item);
+            } else if (item.rideCategory === 'Roundtrip' && existing.hourly0to50 == null) {
+                await StatePricing.findByIdAndUpdate(existing.id || existing._id, {
+                    hourly0to50: item.hourly0to50,
+                    hourly51to100: item.hourly51to100,
+                    hourly101to150: item.hourly101to150,
+                    hourly151to200: item.hourly151to200,
+                    hourly201to4000: item.hourly201to4000,
+                    rate0to50: item.rate0to50,
+                    rate51to100: item.rate51to100,
+                    rate101to150: item.rate101to150,
+                    rate151to200: item.rate151to200,
+                    rate201to4000: item.rate201to4000
+                });
             }
         }
     } catch (e) {
