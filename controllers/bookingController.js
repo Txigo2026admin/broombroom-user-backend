@@ -20,6 +20,52 @@ exports.createBooking = async (req, res) => {
     try {
         const bookingData = { ...req.body };
 
+        // Determine source reliably (BroomBoom App vs BroomBoom Web)
+        const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+        const appSourceHeader = req.headers['x-app-source'];
+        let detectedSource = req.body.source;
+        if (!detectedSource) {
+            if (appSourceHeader) {
+                detectedSource = appSourceHeader;
+            } else if (userAgent.includes('dart') || userAgent.includes('broomboom') || userAgent.includes('flutter')) {
+                detectedSource = 'BroomBoom App';
+            } else {
+                detectedSource = 'BroomBoom Web';
+            }
+        }
+        bookingData.source = detectedSource;
+
+        // Auto infer From & To Cities if missing
+        if (!bookingData.fromCity && bookingData.pickupAddress) {
+            bookingData.fromCity = bookingData.pickupAddress.split(',')[0].trim();
+        }
+        if (!bookingData.toCity && bookingData.dropAddress) {
+            bookingData.toCity = bookingData.dropAddress.split(',')[0].trim();
+        }
+
+        // Auto detect Pet Friendly
+        if (
+            bookingData.petFriendly ||
+            (bookingData.serviceType && bookingData.serviceType.toLowerCase().includes('pet')) ||
+            (bookingData.vehicleCategory && bookingData.vehicleCategory.toLowerCase().includes('pet'))
+        ) {
+            bookingData.petFriendly = true;
+            if (!bookingData.petCount || bookingData.petCount < 1) {
+                bookingData.petCount = 1;
+            }
+        }
+
+        // Safe defaults for required database fields
+        if (!bookingData.customerName) bookingData.customerName = 'Customer';
+        if (!bookingData.customerMobile) bookingData.customerMobile = '9876543210';
+        if (!bookingData.serviceType) bookingData.serviceType = 'Outstation oneway';
+        if (!bookingData.state) bookingData.state = 'West Bengal';
+        if (!bookingData.pickupDate) bookingData.pickupDate = new Date().toISOString().split('T')[0];
+        if (!bookingData.pickupTime) bookingData.pickupTime = '10:00 AM';
+        if (!bookingData.vehicleCategory) bookingData.vehicleCategory = 'Sedan';
+        if (!bookingData.seater) bookingData.seater = 4;
+        if (bookingData.fare === undefined || bookingData.fare === null) bookingData.fare = 0;
+
         // Ensure pickup coordinates are resolved and stored
         if ((!bookingData.pickupLat || !bookingData.pickupLng) && bookingData.pickupAddress) {
             try {
@@ -70,14 +116,14 @@ exports.createBooking = async (req, res) => {
         const booking = await Booking.create(bookingData);
 
         // Auto-sync customer as a User Lead in `users` table
-        if (req.body.customerMobile) {
+        if (bookingData.customerMobile) {
             try {
                 const User = require('../models/User');
-                const rawPhone = String(req.body.customerMobile).trim();
+                const rawPhone = String(bookingData.customerMobile).trim();
                 const digits = rawPhone.replace(/\D/g, '');
                 const tenDigitPhone = digits.length >= 10 ? digits.slice(-10) : digits;
-                const rawEmail = req.body.customerEmail ? String(req.body.customerEmail).trim().toLowerCase() : null;
-                const rawName = req.body.customerName ? String(req.body.customerName).trim() : '';
+                const rawEmail = bookingData.customerEmail ? String(bookingData.customerEmail).trim().toLowerCase() : null;
+                const rawName = bookingData.customerName ? String(bookingData.customerName).trim() : '';
 
                 const phoneVariants = [
                     rawPhone,
@@ -92,12 +138,11 @@ exports.createBooking = async (req, res) => {
                 }
 
                 let existingUser = await User.findOne({ where: { [Op.or]: orConditions } });
-                const bookingSource = req.body.source || (req.headers['user-agent']?.toLowerCase().includes('dart') ? 'BroomBoom App' : 'BroomBoom Web');
                 if (existingUser) {
                     await existingUser.update({
                         updatedAt: new Date(),
                         loginCount: (existingUser.loginCount || 1) + 1,
-                        source: bookingSource,
+                        source: detectedSource,
                         name: rawName && (!existingUser.name || existingUser.name === 'New User' || existingUser.name.startsWith('User ')) ? rawName : existingUser.name
                     });
                 } else {
@@ -108,7 +153,7 @@ exports.createBooking = async (req, res) => {
                         status: 'Active',
                         loginCount: 1,
                         leadType: 'New',
-                        source: bookingSource,
+                        source: detectedSource,
                         registeredAt: new Date()
                     });
                 }
