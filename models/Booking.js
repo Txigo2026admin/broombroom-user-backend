@@ -132,7 +132,8 @@ const Booking = sequelize.define(
 
         dropAddress: {
             type: DataTypes.TEXT,
-            allowNull: false
+            allowNull: true,
+            defaultValue: ''
         },
 
         distance: {
@@ -294,6 +295,65 @@ const Booking = sequelize.define(
         },
 
         // =====================================================
+        // EXTENDED COMMERCIALS, OTP & RIDE TIMINGS
+        // =====================================================
+
+        companyShare: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
+        driverShare: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
+        addonAmount: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
+        isAdvancedPayment: {
+            type: DataTypes.STRING,
+            defaultValue: 'No'
+        },
+
+        zeroCommission: {
+            type: DataTypes.STRING,
+            defaultValue: 'Yes'
+        },
+
+        otpStatus: {
+            type: DataTypes.STRING,
+            defaultValue: 'Pending'
+        },
+
+        otpVerificationTime: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        rideStartTime: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        rideEndTime: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        rideStatus: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        paymentCollectionTime: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
+
+        // =====================================================
         // BOOKING STATUS
         // =====================================================
 
@@ -310,6 +370,11 @@ const Booking = sequelize.define(
         // =====================================================
         // DRIVER
         // =====================================================
+
+        driverId: {
+            type: DataTypes.STRING,
+            allowNull: true
+        },
 
         driverName: {
             type: DataTypes.STRING,

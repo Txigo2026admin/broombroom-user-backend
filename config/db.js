@@ -62,11 +62,55 @@ const connectDB = async () => {
         if (models.PricingRule) {
             await models.PricingRule.sync({ alter: true }).catch(() => {});
         }
+        if (models.Admin) {
+            await models.Admin.sync({ alter: true }).catch((err) => console.error('Admin sync error:', err));
+            try {
+                const adminCount = await models.Admin.count();
+                if (adminCount === 0) {
+                    const defaultUsername = (process.env.DEFAULT_ADMIN_USERNAME || 'admin').trim().toLowerCase();
+                    const defaultPassword = process.env.DEFAULT_ADMIN_PASSWORD || 'Admin@BroomBoom2026!';
+                    const defaultName = process.env.DEFAULT_ADMIN_NAME || 'BroomBoom Controller';
+                    const defaultEmail = process.env.DEFAULT_ADMIN_EMAIL || 'admin@broomboom.com';
+
+                    await models.Admin.create({
+                        username: defaultUsername,
+                        password: defaultPassword,
+                        name: defaultName,
+                        email: defaultEmail,
+                        role: 'superadmin',
+                        mustChangePassword: true
+                    });
+                    console.log(`[Security] Initial admin account "${defaultUsername}" created from environment variables with salted bcrypt hash.`);
+                }
+            } catch (seedErr) {
+                console.error('[Security] Error checking/seeding initial admin:', seedErr.message);
+            }
+        }
         try {
             await sequelize.query(`
+                DO $$
+                DECLARE
+                    r RECORD;
+                BEGIN
+                    FOR r IN (
+                        SELECT conname
+                        FROM pg_constraint
+                        WHERE conrelid = 'users'::regclass AND contype = 'u'
+                    ) LOOP
+                        EXECUTE 'ALTER TABLE users DROP CONSTRAINT IF EXISTS ' || quote_ident(r.conname) || ' CASCADE';
+                    END LOOP;
+                END $$;
+
                 ALTER TABLE users 
                 ADD COLUMN IF NOT EXISTS "source" VARCHAR(100) DEFAULT 'BroomBoom App',
-                ADD COLUMN IF NOT EXISTS "loginHistory" JSONB DEFAULT '[]'::jsonb;
+                ADD COLUMN IF NOT EXISTS "loginHistory" JSONB DEFAULT '[]'::jsonb,
+                ADD COLUMN IF NOT EXISTS "city" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "state" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "vehicleType" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "carNo" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "licenseNo" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "notes" TEXT,
+                ADD COLUMN IF NOT EXISTS "lastLoginAt" TIMESTAMP WITH TIME ZONE;
                 UPDATE users SET "source" = 'BroomBoom App' WHERE "source" IS NULL OR "source" = '';
                 UPDATE users SET "loginHistory" = '[]'::jsonb WHERE "loginHistory" IS NULL;
 
@@ -87,6 +131,9 @@ const connectDB = async () => {
                 ADD COLUMN IF NOT EXISTS "advanceValue" FLOAT DEFAULT 20;
 
                 ALTER TABLE bookings
+                ALTER COLUMN "dropAddress" DROP NOT NULL;
+
+                ALTER TABLE bookings
                 ADD COLUMN IF NOT EXISTS "fromCity" VARCHAR(255),
                 ADD COLUMN IF NOT EXISTS "toCity" VARCHAR(255),
                 ADD COLUMN IF NOT EXISTS "duration" VARCHAR(255),
@@ -95,7 +142,19 @@ const connectDB = async () => {
                 ADD COLUMN IF NOT EXISTS "addons" JSONB DEFAULT '{}'::jsonb,
                 ADD COLUMN IF NOT EXISTS "source" VARCHAR(100) DEFAULT 'BroomBoom Web',
                 ADD COLUMN IF NOT EXISTS "searchDetails" JSONB DEFAULT '{}'::jsonb,
-                ADD COLUMN IF NOT EXISTS "airportTerminal" VARCHAR(255);
+                ADD COLUMN IF NOT EXISTS "airportTerminal" VARCHAR(255),
+                ADD COLUMN IF NOT EXISTS "companyShare" FLOAT DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS "driverShare" FLOAT DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS "addonAmount" FLOAT DEFAULT 0,
+                ADD COLUMN IF NOT EXISTS "isAdvancedPayment" VARCHAR(20) DEFAULT 'No',
+                ADD COLUMN IF NOT EXISTS "zeroCommission" VARCHAR(20) DEFAULT 'Yes',
+                ADD COLUMN IF NOT EXISTS "otpStatus" VARCHAR(50) DEFAULT 'Pending',
+                ADD COLUMN IF NOT EXISTS "otpVerificationTime" VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS "rideStartTime" VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS "rideEndTime" VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS "rideStatus" VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS "paymentCollectionTime" VARCHAR(100),
+                ADD COLUMN IF NOT EXISTS "driverId" VARCHAR(100);
 
                 DELETE FROM airport_pricings WHERE LOWER("carCategory") = 'hatchback';
                 DELETE FROM state_pricings WHERE LOWER("carCategory") = 'hatchback';

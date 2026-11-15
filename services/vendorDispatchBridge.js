@@ -14,9 +14,11 @@ function getVendorPool() {
       process.env.VENDOR_DATABASE_URL ||
       'postgresql://postgres:postgress@127.0.0.1:5432/postgres';
     vendorPgPool = new Pool({
-      connectionString: connStr,
+      connectionString: connStr.split('?')[0],
+      ssl: process.env.VENDOR_DATABASE_URL ? { rejectUnauthorized: false } : false,
       max: 5,
       idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 2500,
     });
   }
   return vendorPgPool;
@@ -421,5 +423,6 @@ module.exports = {
   syncToVendorOrders,
   extractPincodeFromAddress,
   classifyBookingPlan,
+  getVendorPool,
 };
 

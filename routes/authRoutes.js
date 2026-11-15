@@ -8,6 +8,10 @@ const {
 } = require('../controllers/authController');
 
 const {
+    internationalLogin
+} = require('../controllers/internationalAuthController');
+
+const {
     getDeliveryReport
 } = require('../services/smsDeliveryService');
 
@@ -18,6 +22,9 @@ router.post('/send-otp', sendOtp);
 
 // Verify OTP and login
 router.post('/verify-otp', verifyOtp);
+
+// International login (Email or Google without SMS OTP)
+router.post('/international-login', internationalLogin);
 
 // Check PRP SMS delivery status
 router.get('/sms-status/:messageId/:mobile', async (req, res) => {

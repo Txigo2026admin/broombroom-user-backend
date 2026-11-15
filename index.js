@@ -8,7 +8,7 @@ const app = express();
 const corsOptions = {
     origin: true, // Allow any origin that sends a request (including localhost ports and web preview)
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'X-App-Source', 'User-Agent'],
     credentials: true,
 };
 
@@ -26,6 +26,7 @@ app.use(async (req, res, next) => {
 });
 
 app.use('/api/auth', require('./routes/authRoutes'));
+app.use('/api/admin', require('./routes/adminRoutes'));
 app.use('/api/users', require('./routes/userRoutes'));
 app.use('/api/bookings', require('./routes/bookingRoutes'));
 app.use('/api/car-categories', require('./routes/carCategoryRoutes'));
@@ -41,7 +42,7 @@ app.get('/', (req, res) => {
 // Only listen locally — Vercel imports `app` directly and handles requests itself
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 5004;
-    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+    app.listen(PORT, '0.0.0.0', () => console.log(`Server running on port ${PORT}`));
 }
 
 module.exports = app;

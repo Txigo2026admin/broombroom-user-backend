@@ -250,3 +250,138 @@ exports.calculateFare = async (req, res) => {
         res.status(500).json({ message: error.message });
     }
 };
+
+// @desc    Get pilots/vendors for booking allocation
+// @route   GET /api/bookings/pilots
+exports.getPilots = async (req, res) => {
+    try {
+        const { category = '', pilotType = '', search = '', state = '' } = req.query;
+        const pilotsMap = new Map();
+
+        const addPilot = (p) => {
+            const name = String(p.pilotName || p.name || '').trim();
+            const mobile = String(p.mobile || p.phone || '').trim();
+            if (!name && !mobile) return;
+            const key = `${mobile || name}`.toLowerCase();
+            if (pilotsMap.has(key)) return;
+            pilotsMap.set(key, {
+                id: String(p.id || mobile || name),
+                lowBalance: p.lowBalance || 'No',
+                activeStatus: p.activeStatus || 'Active',
+                pilotName: name || 'Pilot',
+                pilotType: p.pilotType || 'Vendor',
+                mobile: mobile || '-',
+                vehicleCategory: p.vehicleCategory || 'Sedan',
+                status: p.status || 'Available',
+                city: p.city || '-',
+                state: p.state || '-',
+                carNo: p.carNo || '',
+            });
+        };
+
+        // 1. Try Vendor Database if VENDOR_DATABASE_URL is configured
+        if (process.env.VENDOR_DATABASE_URL) {
+            try {
+                const { getVendorPool } = require('../services/vendorDispatchBridge');
+                const pool = getVendorPool();
+                const queries = [
+                    `SELECT id, vendor_name AS name, vendor_mobile AS mobile, city, state, status, plan_tier AS "pilotType", vehicle_category AS "vehicleCategory" FROM vendor_subscriptions LIMIT 500`,
+                    `SELECT id, name, mobile, phone, city, state, status, pilot_type AS "pilotType", vehicle_category AS "vehicleCategory", car_no AS "carNo" FROM pilots LIMIT 500`,
+                ];
+                for (const sql of queries) {
+                    try {
+                        const result = await pool.query(sql);
+                        if (result && Array.isArray(result.rows)) {
+                            result.rows.forEach((row) =>
+                                addPilot({
+                                    id: row.id,
+                                    lowBalance: 'No',
+                                    activeStatus: String(row.status || 'Active').toLowerCase() === 'active' ? 'Active' : row.status || 'Active',
+                                    pilotName: row.name,
+                                    pilotType: row.pilotType || 'Partner',
+                                    mobile: row.mobile || row.phone,
+                                    vehicleCategory: row.vehicleCategory || 'Sedan',
+                                    status: row.status || 'Available',
+                                    city: row.city || '-',
+                                    state: row.state || '-',
+                                    carNo: row.carNo || '',
+                                })
+                            );
+                        }
+                    } catch (_) {
+                        // Table/column shape may differ across vendor environments; continue gracefully
+                    }
+                }
+            } catch (vendorErr) {
+                console.warn('Vendor pilots lookup notice:', vendorErr.message);
+            }
+        }
+
+        // 2. Enrich / fallback from existing bookings' assigned drivers & eligiblePilots
+        try {
+            const bookings = await Booking.findAll({
+                attributes: ['driverId', 'driverName', 'driverNumber', 'carNo', 'vehicleCategory', 'fromCity', 'pickupAddress', 'eligiblePilots'],
+                raw: true,
+                limit: 300,
+                order: [['createdAt', 'DESC']],
+            });
+
+            for (const b of bookings) {
+                if (b.driverName || b.driverNumber) {
+                    addPilot({
+                        id: b.driverId || b.driverNumber || b.driverName,
+                        lowBalance: 'No',
+                        activeStatus: 'Active',
+                        pilotName: b.driverName,
+                        pilotType: 'Individual',
+                        mobile: b.driverNumber,
+                        vehicleCategory: b.vehicleCategory || 'Sedan',
+                        status: 'Verified',
+                        city: b.fromCity || (b.pickupAddress ? String(b.pickupAddress).split(',')[0].trim() : '-'),
+                        state: '',
+                        carNo: b.carNo || '',
+                    });
+                }
+                if (Array.isArray(b.eligiblePilots)) {
+                    for (const ep of b.eligiblePilots) {
+                        if (ep && typeof ep === 'object') {
+                            addPilot(ep);
+                        }
+                    }
+                }
+            }
+        } catch (bkErr) {
+            console.warn('Booking pilots fallback notice:', bkErr.message);
+        }
+
+        let list = Array.from(pilotsMap.values());
+
+        const catFilter = String(category).trim().toLowerCase();
+        const typeFilter = String(pilotType).trim().toLowerCase();
+        const searchFilter = String(search).trim().toLowerCase();
+        const stateFilter = String(state).trim().toLowerCase();
+
+        if (catFilter && catFilter !== 'all' && catFilter !== 'choose vehicle category') {
+            list = list.filter((p) => String(p.vehicleCategory || '').toLowerCase().includes(catFilter));
+        }
+        if (typeFilter && typeFilter !== 'all' && typeFilter !== 'pilot type') {
+            list = list.filter((p) => String(p.pilotType || '').toLowerCase().includes(typeFilter));
+        }
+        if (stateFilter) {
+            list = list.filter((p) =>
+                `${p.state || ''} ${p.city || ''}`.toLowerCase().includes(stateFilter)
+            );
+        }
+        if (searchFilter) {
+            list = list.filter((p) =>
+                `${p.id} ${p.pilotName} ${p.mobile} ${p.city} ${p.state} ${p.vehicleCategory} ${p.carNo}`
+                    .toLowerCase()
+                    .includes(searchFilter)
+            );
+        }
+
+        res.status(200).json({ pilots: list, total: list.length });
+    } catch (error) {
+        res.status(500).json({ message: error.message });
+    }
+};

@@ -14,13 +14,11 @@ const User = sequelize.define('User', {
     },
     email: {
         type: DataTypes.STRING,
-        allowNull: true,
-        unique: true
+        allowNull: true
     },
     phone: {
         type: DataTypes.STRING,
-        allowNull: false,
-        unique: true
+        allowNull: false
     },
     status: {
         type: DataTypes.STRING,
@@ -42,9 +40,37 @@ const User = sequelize.define('User', {
         type: DataTypes.JSONB,
         defaultValue: []
     },
+    city: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    state: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    vehicleType: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    carNo: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    licenseNo: {
+        type: DataTypes.STRING,
+        allowNull: true
+    },
+    notes: {
+        type: DataTypes.TEXT,
+        allowNull: true
+    },
     registeredAt: {
         type: DataTypes.DATE,
         defaultValue: DataTypes.NOW
+    },
+    lastLoginAt: {
+        type: DataTypes.DATE,
+        allowNull: true
     }
 }, {
     tableName: 'users',
