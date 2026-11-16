@@ -19,7 +19,7 @@ model bookings {
   state            String   @db.VarChar(255)
   pincode          String?  @db.VarChar(255)
   pickupAddress    String
-  dropAddress      String
+  dropAddress      String?  @db.Text
   distance         String?  @db.VarChar(255)
   pickupLat        String?  @db.VarChar(255)
   pickupLng        String?  @db.VarChar(255)
@@ -37,6 +37,8 @@ model bookings {
   fare             Float
   advance          Float?   @default(0)
   dueFare          Float?   @default(0)
+  paidAmount       Float?   @default(0)
+  paymentStatus    String?  @default("PENDING") @db.VarChar(255)
   extraKm          String?  @db.VarChar(255)
   extraHour        String?  @db.VarChar(255)
   waitingCharges   String?  @db.VarChar(255)
@@ -179,6 +181,13 @@ model users {
   leadType     String?   @default("New") @db.VarChar(50)
   source       String?   @default("BroomBoom App") @db.VarChar(100)
   loginHistory Json?     @default("[]")
+  city          String?   @db.VarChar(255)
+  state         String?   @db.VarChar(255)
+  vehicleType   String?   @db.VarChar(255)
+  carNo         String?   @db.VarChar(255)
+  licenseNo     String?   @db.VarChar(255)
+  notes         String?   @db.Text
+  lastLoginAt   DateTime? @db.Timestamptz(6)
   registeredAt DateTime? @db.Timestamptz(6)
   createdAt    DateTime  @db.Timestamptz(6)
   updatedAt    DateTime  @db.Timestamptz(6)

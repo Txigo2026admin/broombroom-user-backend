@@ -1,0 +1,36 @@
+{
+  "name": "broomboom_user_backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js",
+    "seed": "node seed.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "postinstall": "prisma generate"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@prisma/adapter-pg": "^7.10.0",
+    "@prisma/client": "^7.10.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "ioredis": "^6.0.0",
+    "jsonwebtoken": "^9.0.3",
+    "nodemon": "^3.1.14",
+    "pg": "^8.23.0",
+    "pg-hstore": "^2.3.4",
+    "postgres": "^3.4.9",
+    "qrcode": "^1.5.4",
+    "sequelize": "^6.37.8",
+    "speakeasy": "^2.0.0"
+  },
+  "devDependencies": {
+    "prisma": "^7.10.0"
+  }
+}
