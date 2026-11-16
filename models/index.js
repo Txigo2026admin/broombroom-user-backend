@@ -10,6 +10,7 @@ const City = require('./City');
 const Airport = require('./Airport');
 const AirportPricing = require('./AirportPricing');
 const Admin = require('./Admin');
+const CareerLead = require('./CareerLead');
 
 module.exports = {
     Admin,
@@ -23,5 +24,6 @@ module.exports = {
     RentalPackage,
     City,
     Airport,
-    AirportPricing
+    AirportPricing,
+    CareerLead
 };

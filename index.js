@@ -33,6 +33,7 @@ app.use('/api/car-categories', require('./routes/carCategoryRoutes'));
 app.use('/api/pricing-rules', require('./routes/pricingRuleRoutes'));
 app.use('/api/global-settings', require('./routes/globalSettingRoutes'));
 app.use('/api/addons', require('./routes/addonRoutes'));
+app.use('/api/careers', require('./routes/careerRoutes'));
 app.use('/api/cities', require('./routes/cityRoutes'));
 app.use('/api/airports', require('./routes/airportRoutes'));
 app.use('/api/payment', require('./routes/paymentRoutes'));

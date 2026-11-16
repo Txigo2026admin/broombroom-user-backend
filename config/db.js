@@ -62,6 +62,9 @@ const connectDB = async () => {
         if (models.PricingRule) {
             await models.PricingRule.sync({ alter: true }).catch(() => {});
         }
+        if (models.CareerLead) {
+            await models.CareerLead.sync({ alter: true }).catch((err) => console.error('CareerLead sync error:', err));
+        }
         if (models.Admin) {
             await models.Admin.sync({ alter: true }).catch((err) => console.error('Admin sync error:', err));
             try {
