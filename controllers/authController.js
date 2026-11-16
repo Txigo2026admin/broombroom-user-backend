@@ -293,13 +293,45 @@ exports.verifyOtp = async (req, res) => {
         });
 
         // -------------------------------------------------
-        // Find existing user
+        // Find existing CUSTOMER user
+        // Strictly separate Customer leads from Pilot / Cab Attachment applicant leads
         // -------------------------------------------------
-        let user = await prisma.users.findUnique({
+        const phoneVariants = [
+            cleanPhone,
+            `+91${cleanPhone}`,
+            `+91 ${cleanPhone}`,
+            cleanPhone.length === 10 ? `91${cleanPhone}` : null
+        ].filter(Boolean);
+
+        const allUsersForPhone = await prisma.users.findMany({
             where: {
-                phone: cleanPhone
+                phone: {
+                    in: phoneVariants
+                }
+            },
+            orderBy: {
+                updatedAt: 'desc'
             }
         });
+
+        const isApplicantLead = (u) => {
+            if (!u) return false;
+            const nm = (u.name || '').toLowerCase();
+            const lt = (u.leadType || '').toLowerCase();
+            const sc = (u.source || '').toLowerCase();
+            return (
+                nm.includes('applicant') ||
+                nm.includes('pilot applicant') ||
+                nm.includes('cab attachment') ||
+                lt.startsWith('driver-') ||
+                lt.startsWith('cab-attachment') ||
+                sc.includes('driver job') ||
+                sc.includes('attachment application')
+            );
+        };
+
+        // Select the customer user record (NOT a pilot/attachment applicant row)
+        let user = allUsersForPhone.find(u => !isApplicantLead(u));
 
         // -------------------------------------------------
         // Create user if not exists

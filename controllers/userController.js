@@ -152,11 +152,22 @@ exports.createUser = async (req, res) => {
             orConditions.push({ email: rawEmail });
         }
 
-        let existingUser = await User.findOne({
+        let allMatching = await User.findAll({
             where: {
                 [Op.or]: orConditions
-            }
+            },
+            order: [['updatedAt', 'DESC']]
         });
+
+        const isApplicant = (u) => {
+            const n = (u.name || '').toLowerCase();
+            const s = (u.source || '').toLowerCase();
+            const lt = (u.leadType || '').toLowerCase();
+            return n.includes('applicant') || n.includes('pilot applicant') || n.includes('cab attachment') || lt.startsWith('driver-') || lt.startsWith('cab-attachment') || s.includes('driver job') || s.includes('attachment application');
+        };
+
+        // Prefer real customer record over pilot applicant record
+        let existingUser = allMatching.find(u => !isApplicant(u));
 
         if (existingUser) {
             // Existing user logged in again!
