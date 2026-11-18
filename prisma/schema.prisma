@@ -203,3 +203,37 @@ model otp_verifications {
 
   @@index([phone])
 }
+
+model booking_leads {
+  id              String   @id @db.Uuid
+  leadId          String   @unique @db.VarChar(255)
+  serviceType     String   @db.VarChar(255)
+  tripType        String?  @db.VarChar(255)
+  fromCity        String   @db.VarChar(255)
+  toCity          String?  @db.VarChar(255)
+  pickupAddress   String?  @db.Text
+  dropAddress     String?  @db.Text
+  pickupDate      String   @db.VarChar(255)
+  pickupTime      String   @db.VarChar(255)
+  returnDate      String?  @db.VarChar(255)
+  returnTime      String?  @db.VarChar(255)
+  dropTime        String?  @db.VarChar(255)
+  hourlyPackage   String?  @db.VarChar(255)
+  airportMode     String?  @db.VarChar(255)
+  flightNumber    String?  @db.VarChar(255)
+  distanceKm      Float?
+  durationMinutes Int?
+  customerName    String?  @db.VarChar(255)
+  customerMobile  String?  @db.VarChar(255)
+  customerEmail   String?  @db.VarChar(255)
+  status          String   @default("New Search") @db.VarChar(255)
+  source          String?  @default("Hero Search") @db.VarChar(255)
+  ipAddress       String?  @db.VarChar(255)
+  userAgent       String?  @db.Text
+  estimatedFare   Float?
+  notes           String?  @db.Text
+  rawSearchParams Json?    @default("{}")
+  searchedAt      DateTime @default(now()) @db.Timestamptz(6)
+  createdAt       DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(6)
+}

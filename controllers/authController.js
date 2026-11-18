@@ -79,21 +79,14 @@ exports.sendOtp = async (req, res) => {
             Date.now() + 5 * 60 * 1000
         );
 
-        // -------------------------------------------------
-        // Remove old OTPs for this phone
-        // -------------------------------------------------
-        await prisma.otp_verifications.deleteMany({
-            where: {
-                phone: cleanPhone
-            }
-        });
+        const otpId = crypto.randomUUID();
 
         // -------------------------------------------------
         // Store OTP in PostgreSQL
         // -------------------------------------------------
         await prisma.otp_verifications.create({
             data: {
-                id: crypto.randomUUID(),
+                id: otpId,
                 phone: cleanPhone,
                 otpHash: otpHash,
                 expiresAt: expiresAt,
@@ -116,15 +109,21 @@ exports.sendOtp = async (req, res) => {
                 smsResponse
             );
 
-        } catch (smsError) {
-            // If SMS failed, remove the OTP
-            // so the user cannot try to verify an OTP
-            // that was never delivered.
+            // Clean up old expired OTPs (keep active ones during the window)
             await prisma.otp_verifications.deleteMany({
                 where: {
-                    phone: cleanPhone
+                    phone: cleanPhone,
+                    expiresAt: { lt: new Date() }
                 }
-            });
+            }).catch(() => {});
+
+        } catch (smsError) {
+            // Only remove this specific failed OTP so prior valid OTPs remain intact
+            await prisma.otp_verifications.delete({
+                where: {
+                    id: otpId
+                }
+            }).catch(() => {});
 
             console.error(
                 'PRP SMS Error:',
@@ -194,59 +193,38 @@ exports.verifyOtp = async (req, res) => {
             });
         }
 
-        // -------------------------------------------------
-        // Find latest unverified OTP
-        // -------------------------------------------------
-        const otpRecord =
-            await prisma.otp_verifications.findFirst({
-                where: {
-                    phone: cleanPhone,
-                    verified: false
-                },
-                orderBy: {
-                    createdAt: 'desc'
-                }
-            });
-
-        if (!otpRecord) {
-            return res.status(400).json({
-                success: false,
-                message:
-                    'OTP not found. Please request a new OTP.'
-            });
-        }
+        const now = new Date();
 
         // -------------------------------------------------
-        // Check OTP expiry
+        // Find all active unexpired, unverified OTPs for this phone
         // -------------------------------------------------
-        if (new Date() > otpRecord.expiresAt) {
-            await prisma.otp_verifications.delete({
-                where: {
-                    id: otpRecord.id
-                }
+        const activeOtps = await prisma.otp_verifications.findMany({
+            where: {
+                phone: cleanPhone,
+                verified: false,
+                expiresAt: { gt: now }
+            },
+            orderBy: {
+                createdAt: 'desc'
+            }
+        });
+
+        if (!activeOtps || activeOtps.length === 0) {
+            const anyRecord = await prisma.otp_verifications.findFirst({
+                where: { phone: cleanPhone },
+                orderBy: { createdAt: 'desc' }
             });
+
+            if (anyRecord && now > anyRecord.expiresAt) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'OTP has expired. Please request a new OTP.'
+                });
+            }
 
             return res.status(400).json({
                 success: false,
-                message:
-                    'OTP has expired. Please request a new OTP.'
-            });
-        }
-
-        // -------------------------------------------------
-        // Check maximum attempts
-        // -------------------------------------------------
-        if (otpRecord.attempts >= 5) {
-            await prisma.otp_verifications.delete({
-                where: {
-                    id: otpRecord.id
-                }
-            });
-
-            return res.status(429).json({
-                success: false,
-                message:
-                    'Too many incorrect attempts. Please request a new OTP.'
+                message: 'OTP not found. Please request a new OTP.'
             });
         }
 
@@ -258,19 +236,27 @@ exports.verifyOtp = async (req, res) => {
             .update(cleanOtp)
             .digest('hex');
 
-        // -------------------------------------------------
-        // Compare OTP with database hash (strict verification)
-        // -------------------------------------------------
-        if (enteredOtpHash !== otpRecord.otpHash) {
+        // Check if any of the active OTPs matches the entered code
+        const matchingRecord = activeOtps.find(record => record.otpHash === enteredOtpHash);
+
+        if (!matchingRecord) {
+            const latestRecord = activeOtps[0];
+            const updatedAttempts = (latestRecord.attempts || 0) + 1;
+
+            if (updatedAttempts >= 5) {
+                await prisma.otp_verifications.deleteMany({
+                    where: { phone: cleanPhone }
+                });
+
+                return res.status(429).json({
+                    success: false,
+                    message: 'Too many incorrect attempts. Please request a new OTP.'
+                });
+            }
+
             await prisma.otp_verifications.update({
-                where: {
-                    id: otpRecord.id
-                },
-                data: {
-                    attempts: {
-                        increment: 1
-                    }
-                }
+                where: { id: latestRecord.id },
+                data: { attempts: updatedAttempts }
             });
 
             return res.status(400).json({
@@ -278,6 +264,16 @@ exports.verifyOtp = async (req, res) => {
                 message: 'Invalid OTP. Please check the code sent to your mobile phone.'
             });
         }
+
+        const otpRecord = matchingRecord;
+
+        // Clean up other unverified OTP records for this phone
+        await prisma.otp_verifications.deleteMany({
+            where: {
+                phone: cleanPhone,
+                id: { not: matchingRecord.id }
+            }
+        }).catch(() => {});
 
         // -------------------------------------------------
         // OTP is correct
