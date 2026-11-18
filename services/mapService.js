@@ -320,54 +320,89 @@ async function searchGooglePlaces(query, limit = 5) {
     const apiKey = getGoogleApiKey();
     if (!apiKey || !query) return [];
     try {
-        const url = 'https://places.googleapis.com/v1/places:searchText';
+        const url = 'https://places.googleapis.com/v1/places:autocomplete';
         const res = await fetch(url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
                 'X-Goog-Api-Key': apiKey,
-                'X-Goog-FieldMask': 'places.id,places.displayName,places.formattedAddress,places.location,places.addressComponents'
             },
             body: JSON.stringify({
-                textQuery: query,
-                regionCode: 'IN',
-                pageSize: limit
+                input: query,
+                includedRegionCodes: ['IN']
             }),
-            signal: AbortSignal.timeout(5000)
+            signal: AbortSignal.timeout(4000)
         });
 
-        if (!res.ok) return [];
+        if (!res.ok) {
+            console.warn('[MapService] Google Places Autocomplete HTTP', res.status);
+            return [];
+        }
 
         const data = await res.json();
+        const suggestions = (data.suggestions || []).slice(0, limit);
+        if (suggestions.length === 0) return [];
+
         const results = [];
-        for (const p of (data.places || [])) {
-            const lat = p.location?.latitude;
-            const lon = p.location?.longitude;
-            if (lat != null && lon != null) {
-                const { state, country } = extractStateAndCountry(p.addressComponents);
-                const name = p.displayName?.text || (p.formattedAddress || query).split(',')[0].trim();
-                const displayName = p.formattedAddress || name;
-                const placeId = p.id;
+        const detailPromises = suggestions.map(async (s) => {
+            const p = s.placePrediction;
+            if (!p || !p.placeId) return null;
+            const fullText = p.text?.text || '';
 
-                const item = {
-                    name,
-                    displayName,
-                    lat: String(lat),
-                    lon: String(lon),
-                    state,
-                    country,
-                    placeId,
-                    source: 'GoogleMaps'
-                };
+            try {
+                const detailRes = await fetch(
+                    `https://places.googleapis.com/v1/places/${encodeURIComponent(p.placeId)}`,
+                    {
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'X-Goog-Api-Key': apiKey,
+                            'X-Goog-FieldMask': 'id,displayName,formattedAddress,location,addressComponents'
+                        },
+                        signal: AbortSignal.timeout(3000)
+                    }
+                );
+                if (detailRes.ok) {
+                    const place = await detailRes.json();
+                    const lat = place.location?.latitude;
+                    const lon = place.location?.longitude;
+                    if (lat != null && lon != null) {
+                        const { state, country } = extractStateAndCountry(place.addressComponents);
+                        const displayName = place.formattedAddress || fullText;
+                        const item = {
+                            name: displayName,
+                            displayName: displayName,
+                            lat: String(lat),
+                            lon: String(lon),
+                            state: state || '',
+                            country: country || 'India',
+                            placeId: place.id,
+                            source: 'GoogleMaps'
+                        };
+                        saveOrUpdateCity(item).catch(() => {});
+                        return item;
+                    }
+                }
+            } catch (dErr) {}
 
-                // Auto-cache to DB in background
-                saveOrUpdateCity(item).catch(() => {});
-                results.push(item);
-            }
+            return {
+                name: fullText,
+                displayName: fullText,
+                lat: '22.5726',
+                lon: '88.3639',
+                state: 'India',
+                country: 'India',
+                placeId: p.placeId,
+                source: 'GoogleMaps'
+            };
+        });
+
+        const resolved = await Promise.all(detailPromises);
+        for (const r of resolved) {
+            if (r) results.push(r);
         }
         return results;
     } catch (err) {
-        console.warn(`[MapService] Google Places search failed for "${query}":`, err.message);
+        console.warn(`[MapService] Google Places Autocomplete failed for "${query}":`, err.message);
         return [];
     }
 }
@@ -678,7 +713,7 @@ async function searchLocations(query) {
                             : primary;
 
                         const added = addResult({
-                            name: cleanTitle,
+                            name: item.display_name,
                             displayName: item.display_name,
                             lat: String(item.lat),
                             lon: String(item.lon),
@@ -692,7 +727,7 @@ async function searchLocations(query) {
                             osmResultsCount++;
                             // Asynchronously cache in DB
                             saveOrUpdateCity({
-                                name: cleanTitle,
+                                name: item.display_name,
                                 displayName: item.display_name,
                                 lat: item.lat,
                                 lon: item.lon,
@@ -711,24 +746,15 @@ async function searchLocations(query) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // STAGE 3: Google Maps (Google Places API - Micro & Small Locations)
-    // Runs if:
-    // 1) Results are sparse (< 4 results), OR
-    // 2) OpenStreetMap returned 0 results, OR
-    // 3) Query contains keywords typical of micro-localities, societies,
-    //    commercial complexes, restaurants, clinics, gates, or street landmarks.
+    // STAGE 3: Google Maps (Google Places Autocomplete API)
     // ─────────────────────────────────────────────────────────────
-    const isMicroLocationQuery = /(society|complex|apartment|tower|heights|enclave|vihar|nagar|colony|road|rd|street|lane|gali|block|sector|sec|gate|terminal|airport|station|railway|mall|bazar|market|hospital|clinic|hotel|restaurant|cafe|dhaba|bhavan|bhawan|building|residency|resort|park|garden|cross|stand|bridge|chowk|para)/i.test(cleanQuery);
-
-    if (results.length < 5 || osmResultsCount === 0 || isMicroLocationQuery) {
-        try {
-            const googleResults = await searchGooglePlaces(searchQuery, 5);
-            for (const place of googleResults) {
-                addResult(place);
-            }
-        } catch (gErr) {
-            console.warn('[MapService] Google Places stage error:', gErr.message);
+    try {
+        const googleResults = await searchGooglePlaces(searchQuery, 6);
+        for (const place of googleResults) {
+            addResult(place);
         }
+    } catch (gErr) {
+        console.warn('[MapService] Google Places stage error:', gErr.message);
     }
 
     // ─────────────────────────────────────────────────────────────

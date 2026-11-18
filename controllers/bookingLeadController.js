@@ -66,22 +66,45 @@ exports.createBookingLead = async (req, res) => {
         const clientIp = forwarded ? forwarded.split(',')[0].trim() : (req.socket?.remoteAddress || null);
         const userAgent = req.headers['user-agent'] || null;
 
-        // Deduplication check: if identical search happened from same IP or phone within the last 60 seconds
+        // Deduplication & Lead Linking check:
+        // If customer mobile is provided, check if an existing lead from this user/IP in the last 15 minutes can be updated with their phone
+        const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
         const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
-        const existingLead = await BookingLead.findOne({
-            where: {
-                fromCity: cleanFromCity,
-                serviceType: resolvedServiceType,
-                createdAt: { [Op.gte]: oneMinuteAgo },
-                ...(cleanPhone ? { customerMobile: cleanPhone } : (clientIp ? { ipAddress: clientIp } : {}))
-            },
-            order: [['createdAt', 'DESC']]
-        });
+
+        let existingLead = null;
+        if (cleanPhone) {
+            existingLead = await BookingLead.findOne({
+                where: {
+                    [Op.or]: [
+                        { customerMobile: cleanPhone },
+                        ...(clientIp ? [{ ipAddress: clientIp, customerMobile: null }] : [])
+                    ],
+                    createdAt: { [Op.gte]: fifteenMinsAgo }
+                },
+                order: [['createdAt', 'DESC']]
+            });
+        } else if (clientIp) {
+            existingLead = await BookingLead.findOne({
+                where: {
+                    fromCity: cleanFromCity,
+                    serviceType: resolvedServiceType,
+                    ipAddress: clientIp,
+                    createdAt: { [Op.gte]: oneMinuteAgo }
+                },
+                order: [['createdAt', 'DESC']]
+            });
+        }
 
         if (existingLead) {
-            // Update existing lead with latest search params without creating duplicate row
+            // Update existing lead with latest search params and customer mobile without losing contact info
             await existingLead.update({
+                customerMobile: cleanPhone || existingLead.customerMobile,
+                customerName: customerName ? String(customerName).trim() : existingLead.customerName,
+                customerEmail: cleanEmail || existingLead.customerEmail,
+                fromCity: cleanFromCity || existingLead.fromCity,
                 toCity: cleanToCity || existingLead.toCity,
+                pickupAddress: pickupAddress ? String(pickupAddress).trim() : (existingLead.pickupAddress || cleanFromCity),
+                dropAddress: dropAddress ? String(dropAddress).trim() : (existingLead.dropAddress || cleanToCity),
                 pickupDate: pickupDate || existingLead.pickupDate,
                 pickupTime: pickupTime || existingLead.pickupTime,
                 returnDate: returnDate || existingLead.returnDate,
@@ -94,9 +117,11 @@ exports.createBookingLead = async (req, res) => {
                 searchedAt: new Date()
             });
 
+            console.log(`[BookingLead] Refreshed existing lead ${existingLead.leadId}: phone=${existingLead.customerMobile}, from="${existingLead.fromCity}" to="${existingLead.toCity || 'Local'}"`);
+
             return res.status(200).json({
                 success: true,
-                message: 'Existing booking lead refreshed',
+                message: 'Existing booking lead refreshed with contact details',
                 data: existingLead
             });
         }
