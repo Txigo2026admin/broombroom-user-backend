@@ -2,18 +2,58 @@ const { Op } = require('sequelize');
 const Booking = require('../models/Booking');
 const { syncToVendorOrders } = require('../services/vendorDispatchBridge');
 const mapService = require('../services/mapService');
-
+const User = require('../models/User');
 // @desc    Get all bookings
 // @route   GET /api/bookings
 exports.getBookings = async (req, res) => {
     try {
-        const bookings = await Booking.find().sort({ createdAt: -1 });
-        res.status(200).json(bookings);
+        if (!req.user?.id) {
+            return res.status(401).json({
+                message: 'Please login first'
+            });
+        }
+
+        const user = await User.findByPk(req.user.id);
+
+        if (!user || !user.phone) {
+            return res.status(403).json({
+                message: 'Registered mobile number not found'
+            });
+        }
+
+        const digits = String(user.phone).replace(/\D/g, '');
+
+        if (!/^(?:91)?[6-9]\d{9}$/.test(digits)) {
+            return res.status(400).json({
+                message: 'Invalid registered mobile number'
+            });
+        }
+
+        const mobile = digits.slice(-10);
+
+        const bookings = await Booking.findAll({
+            where: {
+                customerMobile: {
+                    [Op.in]: [
+                        mobile,
+                        `91${mobile}`,
+                        `+91${mobile}`,
+                        `+91 ${mobile}`
+                    ]
+                }
+            },
+            order: [['createdAt', 'DESC']]
+        });
+
+        return res.status(200).json(bookings);
+
     } catch (error) {
-        res.status(500).json({ message: error.message });
+        console.error('Get bookings error:', error);
+        return res.status(500).json({
+            message: 'Failed to fetch bookings'
+        });
     }
 };
-
 // @desc    Create new booking
 // @route   POST /api/bookings
 exports.createBooking = async (req, res) => {
@@ -57,7 +97,11 @@ exports.createBooking = async (req, res) => {
 
         // Safe defaults for required database fields
         if (!bookingData.customerName) bookingData.customerName = 'Customer';
-        if (!bookingData.customerMobile) bookingData.customerMobile = '9876543210';
+        if (!bookingData.customerMobile) {
+    return res.status(400).json({
+        message: 'Customer mobile number is required'
+    });
+}
         if (!bookingData.serviceType) bookingData.serviceType = 'Outstation oneway';
         if (!bookingData.state) bookingData.state = 'West Bengal';
         if (!bookingData.pickupDate) bookingData.pickupDate = new Date().toISOString().split('T')[0];

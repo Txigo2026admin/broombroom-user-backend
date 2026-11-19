@@ -675,78 +675,7 @@ async function searchLocations(query) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // STAGE 2: OpenStreetMap (Nominatim API)
-    // ─────────────────────────────────────────────────────────────
-    let osmResultsCount = 0;
-    try {
-        const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
-        const queries = [searchQuery];
-        if (searchQuery !== cleanQuery) queries.push(cleanQuery);
-
-        for (const q of queries) {
-            const nomUrl = getNominatimUrl();
-            const url = isPin
-                ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=6`
-                : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
-
-            const res = await fetch(url, {
-                headers: {
-                    'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
-                    'Accept': 'application/json'
-                },
-                signal: AbortSignal.timeout(4000)
-            });
-
-            if (res.ok) {
-                const data = await res.json();
-                if (Array.isArray(data)) {
-                    for (const item of data) {
-                        if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
-                            continue;
-                        }
-
-                        const parts = (item.display_name || '').split(',');
-                        const primary = (parts[0] || '').trim();
-                        const secondary = parts.length > 1 ? parts[1].trim() : '';
-                        const cleanTitle = secondary && secondary.length < 25
-                            ? `${primary}, ${secondary}`
-                            : primary;
-
-                        const added = addResult({
-                            name: item.display_name,
-                            displayName: item.display_name,
-                            lat: String(item.lat),
-                            lon: String(item.lon),
-                            state: item.address?.state || '',
-                            country: item.address?.country || 'India',
-                            placeId: item.place_id ? String(item.place_id) : undefined,
-                            source: 'OpenStreetMap'
-                        });
-
-                        if (added) {
-                            osmResultsCount++;
-                            // Asynchronously cache in DB
-                            saveOrUpdateCity({
-                                name: item.display_name,
-                                displayName: item.display_name,
-                                lat: item.lat,
-                                lon: item.lon,
-                                state: item.address?.state || '',
-                                country: item.address?.country || 'India',
-                                placeId: item.place_id ? String(item.place_id) : undefined
-                            }).catch(() => {});
-                        }
-                    }
-                }
-            }
-            if (results.length >= 8) break;
-        }
-    } catch (e) {
-        console.warn('[MapService] Nominatim stage error:', e.message);
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // STAGE 3: Google Maps (Google Places Autocomplete API)
+    // STAGE 2: Google Maps (Google Places Autocomplete API) - Fast & Accurate
     // ─────────────────────────────────────────────────────────────
     try {
         const googleResults = await searchGooglePlaces(searchQuery, 6);
@@ -755,6 +684,72 @@ async function searchLocations(query) {
         }
     } catch (gErr) {
         console.warn('[MapService] Google Places stage error:', gErr.message);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 3: OpenStreetMap (Nominatim API) - Fallback if more results needed
+    // ─────────────────────────────────────────────────────────────
+    if (results.length < 6) {
+        let osmResultsCount = 0;
+        try {
+            const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
+            const queries = [searchQuery];
+            if (searchQuery !== cleanQuery) queries.push(cleanQuery);
+
+            for (const q of queries) {
+                const nomUrl = getNominatimUrl();
+                const url = isPin
+                    ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=6`
+                    : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
+
+                const res = await fetch(url, {
+                    headers: {
+                        'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
+                        'Accept': 'application/json'
+                    },
+                    signal: AbortSignal.timeout(2000)
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        for (const item of data) {
+                            if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
+                                continue;
+                            }
+
+                            const added = addResult({
+                                name: item.display_name,
+                                displayName: item.display_name,
+                                lat: String(item.lat),
+                                lon: String(item.lon),
+                                state: item.address?.state || '',
+                                country: item.address?.country || 'India',
+                                placeId: item.place_id ? String(item.place_id) : undefined,
+                                source: 'OpenStreetMap'
+                            });
+
+                            if (added) {
+                                osmResultsCount++;
+                                // Asynchronously cache in DB
+                                saveOrUpdateCity({
+                                    name: item.display_name,
+                                    displayName: item.display_name,
+                                    lat: item.lat,
+                                    lon: item.lon,
+                                    state: item.address?.state || '',
+                                    country: item.address?.country || 'India',
+                                    placeId: item.place_id ? String(item.place_id) : undefined
+                                }).catch(() => {});
+                            }
+                        }
+                    }
+                }
+                if (results.length >= 8) break;
+            }
+        } catch (e) {
+            // Silently continue if Nominatim is slow or unreachable
+        }
     }
 
     // ─────────────────────────────────────────────────────────────

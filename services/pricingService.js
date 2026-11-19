@@ -8,46 +8,87 @@ const CarCategory = require('../models/CarCategory');
 const GlobalSetting = require('../models/GlobalSetting');
 const mapService = require('./mapService');
 
-// ---------- Add‑on prices ----------
-const ADDON_PRICES = {
-    assuredLuggageSpace: 1001,
-    confirmCarModel2022: 751,
+// ---------- Add‑on prices (Live DB lookup with defaults) ----------
+const DEFAULT_ADDON_PRICES = {
     petAllowance: 1001,
+    roofCarrier: 157,
+    assuredLuggageSpace: 157,
+    language: 209,
+    newVehicle: 262,
+    confirmCarModel2022: 262,
+    sightseeing: 787,
+    refundable: 751,
     refundableBooking: 751
 };
 
+async function getLiveAddonPrices() {
+    const prices = { ...DEFAULT_ADDON_PRICES };
+    try {
+        const setting = await GlobalSetting.findOne({
+            where: { key: 'addons_config' }
+        });
+        if (setting && Array.isArray(setting.value) && setting.value.length > 0) {
+            for (const item of setting.value) {
+                const k = (item.key || item.name || '').toLowerCase();
+                const p = Number(item.price);
+                if (isNaN(p) || p <= 0) continue;
+                if (k.includes('pet')) prices.petAllowance = p;
+                else if (k.includes('roof') || k.includes('carrier') || k.includes('luggage')) {
+                    prices.roofCarrier = p;
+                    prices.assuredLuggageSpace = p;
+                } else if (k.includes('lang')) prices.language = p;
+                else if (k.includes('vehicle') || k.includes('car')) {
+                    prices.newVehicle = p;
+                    prices.confirmCarModel2022 = p;
+                } else if (k.includes('sight') || k.includes('tour')) prices.sightseeing = p;
+                else if (k.includes('refund')) {
+                    prices.refundable = p;
+                    prices.refundableBooking = p;
+                }
+            }
+        }
+    } catch (_) {}
+    return prices;
+}
+
 const RENTAL_FALLBACK_TABLE = {
     'Sedan': {
+        1: { kms: 15, fare: 1351, extraKm: 20, extraHr: 200 },
         5: { kms: 50, fare: 3551, extraKm: 20, extraHr: 200 },
         8: { kms: 80, fare: 4551, extraKm: 20, extraHr: 200 },
         10: { kms: 100, fare: 5051, extraKm: 20, extraHr: 200 },
         12: { kms: 120, fare: 6051, extraKm: 20, extraHr: 200 },
     },
     'SUV': {
+        1: { kms: 15, fare: 1551, extraKm: 25, extraHr: 250 },
         5: { kms: 50, fare: 4551, extraKm: 25, extraHr: 250 },
         8: { kms: 80, fare: 5551, extraKm: 25, extraHr: 250 },
         10: { kms: 100, fare: 7051, extraKm: 25, extraHr: 250 },
         12: { kms: 120, fare: 8051, extraKm: 25, extraHr: 250 },
     },
     'SUV+': {
+        1: { kms: 15, fare: 1851, extraKm: 30, extraHr: 300 },
         5: { kms: 50, fare: 6051, extraKm: 30, extraHr: 300 },
         8: { kms: 80, fare: 7551, extraKm: 30, extraHr: 300 },
         10: { kms: 100, fare: 8051, extraKm: 30, extraHr: 300 },
         12: { kms: 120, fare: 9051, extraKm: 30, extraHr: 300 },
     },
     '13 Seater Traveller': {
+        1: { kms: 15, fare: 3200, extraKm: 40, extraHr: 400 },
         5: { kms: 50, fare: 9051, extraKm: 40, extraHr: 400 },
         8: { kms: 80, fare: 10051, extraKm: 40, extraHr: 400 },
         10: { kms: 100, fare: 11051, extraKm: 40, extraHr: 400 },
         12: { kms: 120, fare: 12051, extraKm: 40, extraHr: 400 },
     },
     '17 Seater Traveller': {
+        1: { kms: 15, fare: 3800, extraKm: 45, extraHr: 450 },
         5: { kms: 50, fare: 10051, extraKm: 45, extraHr: 450 },
         8: { kms: 80, fare: 11051, extraKm: 45, extraHr: 450 },
         10: { kms: 100, fare: 12051, extraKm: 45, extraHr: 450 },
         12: { kms: 120, fare: 13051, extraKm: 45, extraHr: 450 },
     },
     '25 Seater Traveller': {
+        1: { kms: 15, fare: 4500, extraKm: 50, extraHr: 500 },
         5: { kms: 50, fare: 12051, extraKm: 50, extraHr: 500 },
         8: { kms: 80, fare: 13051, extraKm: 50, extraHr: 500 },
         10: { kms: 100, fare: 14051, extraKm: 50, extraHr: 500 },
@@ -426,13 +467,29 @@ async function calculatePrice({
         `Dist=${resolvedDistance}, State=${resolvedState}`
     );
 
-    // 5. Calculate add‑on total
+    // 5. Calculate add‑on total using dynamic admin-configured addon prices
+    const liveAddonPrices = await getLiveAddonPrices();
     let addonTotal = 0;
     const appliedAddons = {};
-    for (const [key, price] of Object.entries(ADDON_PRICES)) {
-        if (addons[key]) {
-            addonTotal += safeNumber(price, 0);
-            appliedAddons[key] = safeNumber(price, 0);
+    if (addons && typeof addons === 'object') {
+        for (const [key, val] of Object.entries(addons)) {
+            if (!val) continue;
+            let matchedPrice = liveAddonPrices[key];
+            if (matchedPrice == null) {
+                const lk = key.toLowerCase();
+                if (lk.includes('pet')) matchedPrice = liveAddonPrices.petAllowance;
+                else if (lk.includes('roof') || lk.includes('carrier') || lk.includes('luggage')) matchedPrice = liveAddonPrices.roofCarrier;
+                else if (lk.includes('lang')) matchedPrice = liveAddonPrices.language;
+                else if (lk.includes('vehicle') || lk.includes('car')) matchedPrice = liveAddonPrices.newVehicle;
+                else if (lk.includes('sight')) matchedPrice = liveAddonPrices.sightseeing;
+                else if (lk.includes('refund')) matchedPrice = liveAddonPrices.refundableBooking;
+            }
+            if (matchedPrice != null && matchedPrice > 0) {
+                const count = (typeof val === 'number' && val > 0) ? val : 1;
+                const cost = safeNumber(matchedPrice * count, 0);
+                addonTotal += cost;
+                appliedAddons[key] = cost;
+            }
         }
     }
 
@@ -632,8 +689,10 @@ async function calculatePrice({
                 durationMinutes: mapRouteInfo?.durationMinutes,
                 extraKms: isTier1 ? 0 : Math.round((currentDistance - baseKms) * 10) / 10,
                 extraKmRate,
+                ratePerKm: extraKmRate,
                 waitingCharge,
                 waitingChargePerHour: waitingCharge,
+                extraHourRate: waitingCharge,
                 waitingFreeMins: airportRule?.waitingFreeMins || 60,
                 nightAllowance,
                 isNightApplicable: isNight,
@@ -643,7 +702,6 @@ async function calculatePrice({
                 advance: advanceAmount,
                 inclusions: [
                     `Fixed Airport Transfer Charges (${activeTier})`,
-                    'Driver Allowance',
                     'Airport Assistance'
                 ],
                 exclusions: [
@@ -793,6 +851,14 @@ async function calculatePrice({
                 includedKms: pkgKms,
                 status: 'Active'
             });
+            if (!pkg) {
+                pkg = await RentalPackage.findOne({
+                    state: { $regex: new RegExp('^' + resolvedState.trim() + '$', 'i') },
+                    carCategory: normalizedCarCategory,
+                    packageHours: pkgHours,
+                    status: 'Active'
+                });
+            }
         }
         if (!pkg) {
             pkg = await RentalPackage.findOne({
@@ -800,6 +866,21 @@ async function calculatePrice({
                 carCategory: normalizedCarCategory,
                 packageHours: pkgHours,
                 includedKms: pkgKms,
+                status: 'Active'
+            });
+        }
+        if (!pkg) {
+            pkg = await RentalPackage.findOne({
+                state: 'Default',
+                carCategory: normalizedCarCategory,
+                packageHours: pkgHours,
+                status: 'Active'
+            });
+        }
+        if (!pkg) {
+            pkg = await RentalPackage.findOne({
+                carCategory: normalizedCarCategory,
+                packageHours: pkgHours,
                 status: 'Active'
             });
         }
@@ -815,7 +896,7 @@ async function calculatePrice({
             const extraKmRate = pkg ? safeNumber(pkg.extraKmRate, 0) : (fallbackPkg?.extraKm || 0);
             const extraHourRate = pkg ? safeNumber(pkg.extraHourRate, 0) : (fallbackPkg?.extraHr || 0);
 
-            let baseFare = baseFareVal;
+            const baseFare = baseFareVal;
             const details = {
                 type: `Rental Package (${pkgHours} hrs / ${pkgKms} km)`,
                 baseFare: baseFareVal,
@@ -825,33 +906,8 @@ async function calculatePrice({
                 packageHours: pkgHours
             };
 
-            const extraKms = Math.max(0, resolvedDistance - pkgKms);
-            let extraHours = 0;
-
-            if (pickupDate && pickupTime && returnDate && returnTime) {
-                const pickup = new Date(`${pickupDate} ${pickupTime}`);
-                const returnDt = new Date(`${returnDate} ${returnTime}`);
-                if (!isNaN(pickup.getTime()) && !isNaN(returnDt.getTime())) {
-                    const diffMs = returnDt - pickup;
-                    if (diffMs > 0) {
-                        const actualHours = Math.ceil(diffMs / (1000 * 60 * 60));
-                        extraHours = Math.max(0, actualHours - pkgHours);
-                    }
-                }
-            }
-
-            if (extraKms > 0 || extraHours > 0) {
-                const extraCharges = (extraKms * extraKmRate) + (extraHours * extraHourRate);
-                baseFare += safeNumber(extraCharges, 0);
-                details.extraKms = extraKms;
-                details.extraHours = extraHours;
-                details.extraCharges = safeNumber(extraCharges, 0);
-            }
-
-            const rentalDist = resolvedDistance > 0 ? resolvedDistance : pkgKms;
-            const rentalDuration = (mapRouteInfo?.durationMinutes && mapRouteInfo.durationMinutes > 0)
-                ? mapRouteInfo.durationMinutes
-                : (pkgHours * 60);
+            const rentalDist = pkgKms;
+            const rentalDuration = pkgHours * 60;
 
             const result = buildFareResult({
                 rawFare: baseFare,
@@ -861,7 +917,7 @@ async function calculatePrice({
                 details: { ...details, distance: rentalDist, durationMinutes: rentalDuration },
                 advanceType: pkg?.advanceType || 'Percentage',
                 advanceValue: pkg?.advanceValue != null ? pkg.advanceValue : 20,
-                appliedRule: pkg?._id || `rental-${normalizedCarCategory}-${pkgHours}h`,
+                appliedRule: pkg?.id || `rental-${normalizedCarCategory}-${pkgHours}h`,
                 ruleType: 'RentalPackage',
                 distance: rentalDist,
                 durationMinutes: rentalDuration
@@ -940,7 +996,6 @@ async function calculatePrice({
         const ratePerKm = safeNumber(stateRule.ratePerKm, 0);
         const extraKmRate = safePositive(stateRule.extraKmRate, ratePerKm);
         const minKms = safeNumber(stateRule.minKms, 0);
-        const driverBata = safeNumber(stateRule.driverBata, 0);
         const nightAllowance = safeNumber(stateRule.nightAllowance, 0);
         const toll = safeNumber(stateRule.toll, 0);
         const parking = safeNumber(stateRule.parking, 0);
@@ -962,7 +1017,6 @@ async function calculatePrice({
             ratePerKm,
             extraKmRate,
             minKms,
-            driverBata,
             nightAllowance,
             waitingChargePerHour,
             waitingFreeMins,
@@ -1024,6 +1078,9 @@ async function calculatePrice({
 
             baseFareTotal = Math.round(selectedBaseFare + appliedNightAllowance);
 
+            const resolvedExtraKm = safePositive(stateRule.extraKmRate, slabRate);
+            const resolvedWaitingHr = safePositive(stateRule.waitingChargePerHour || stateRule.extraHourRate || stateRule.waitingCharge, 150);
+
             Object.assign(details, {
                 slab,
                 billableKms: resolvedDistance,
@@ -1032,7 +1089,9 @@ async function calculatePrice({
                 extraKmCharges: 0,
                 distanceFare,
                 ratePerKm: slabRate,
-                extraKmRate: slabRate,
+                extraKmRate: resolvedExtraKm,
+                extraHourRate: resolvedWaitingHr,
+                waitingChargePerHour: resolvedWaitingHr,
                 adminSetPrice,
                 threshold: adminSetPrice,
                 selectedBaseFare,
@@ -1043,7 +1102,6 @@ async function calculatePrice({
                     threshold: adminSetPrice,
                     selected: selectedBaseFare === distanceFare ? 'distanceFare' : 'adminSetPrice'
                 },
-                driverBata,
                 nightAllowance: appliedNightAllowance,
                 isNight,
                 rawCalculatedTotal: baseFareTotal,
@@ -1146,13 +1204,18 @@ async function calculatePrice({
                 ? safeNumber(oneWayDistance, 0)
                 : Math.round((resolvedDistance / 2) * 10) / 10;
 
+            const resolvedRtExtraKm = safePositive(stateRule.extraKmRate, slabRate);
+            const resolvedRtWaitingHr = safePositive(stateRule.waitingChargePerHour || stateRule.waitingCharge, 150);
+
             Object.assign(details, {
                 slab,
                 actualDistance: resolvedDistance,
                 oneWayDistance: oneWayDist,
                 distanceFare,
                 ratePerKm: slabRate,
-                extraKmRate: slabRate,
+                extraKmRate: resolvedRtExtraKm,
+                extraHourRate: activeHourlyRate || resolvedRtWaitingHr,
+                waitingChargePerHour: resolvedRtWaitingHr,
                 extraKms: 0,
                 extraKmCharges: 0,
                 totalHours,
@@ -1172,7 +1235,6 @@ async function calculatePrice({
                         ? 'distanceFare'
                         : (selectedBaseFare === hourlyFare ? 'hourlyFare' : 'adminSetPrice')
                 },
-                driverBata,
                 nightAllowance: appliedNightAllowance,
                 isNight,
                 rawCalculatedTotal: baseFareTotal,
@@ -1195,7 +1257,7 @@ async function calculatePrice({
             const appliedNightAllowance = isNight ? nightAllowance : 0;
 
             const calculatedTotal = Math.round(
-                distanceFare + driverBata + appliedNightAllowance + toll + parking +
+                distanceFare  + toll + parking +
                 permit + stateTax + airportEntry + otherCharges
             );
 
@@ -1204,7 +1266,6 @@ async function calculatePrice({
             Object.assign(details, {
                 billableKms,
                 distanceFare,
-                driverBata,
                 nightAllowance: appliedNightAllowance,
                 isNight,
                 rawCalculatedTotal: calculatedTotal,
@@ -1258,7 +1319,6 @@ async function calculatePrice({
     const threshold = def.threshold || 500;
     const waitingChargePerHour = 150;
     const waitingFreeMins = 60;
-    const driverBata = def.driverBata || 0;
 
     let baseFareTotal = 0;
     let slab = '0-50 km';
@@ -1277,7 +1337,6 @@ async function calculatePrice({
         extraKms,
         extraKmCharges,
         distanceFare,
-        driverBata,
         threshold,
         adminSetPrice: threshold,
         waitingChargePerHour,
@@ -1401,7 +1460,7 @@ async function calculatePrice({
     } else {
         billableKms = Math.max(resolvedDistance, 50);
         distanceFare = Math.round(billableKms * perKmRate);
-        baseFareTotal = Math.max(distanceFare + driverBata, threshold);
+        baseFareTotal = Math.max(distanceFare, threshold);
     }
 
     Object.assign(details, {
@@ -1437,5 +1496,7 @@ module.exports = {
     calculatePrice,
     normalizeRideType,
     normalizeCarCategory,
-    ADDON_PRICES
+    ADDON_PRICES: DEFAULT_ADDON_PRICES,
+    DEFAULT_ADDON_PRICES,
+    getLiveAddonPrices
 };

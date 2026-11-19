@@ -103,7 +103,32 @@ exports.deleteRouteRule = async (req, res) => {
 // @route   GET /api/pricing-rules/rental
 exports.getRentalRules = async (req, res) => {
     try {
-        const rules = await RentalPackage.find().sort({ createdAt: -1 });
+        const query = {};
+        if (req.query.state && req.query.state !== 'ALL') {
+            query.state = req.query.state;
+        }
+        if (req.query.carCategory && req.query.carCategory !== 'ALL') {
+            query.carCategory = req.query.carCategory;
+        }
+        if (req.query.packageHours) {
+            query.packageHours = parseInt(req.query.packageHours, 10);
+        }
+        if (req.query.status && req.query.status !== 'ALL') {
+            query.status = req.query.status;
+        }
+
+        let rules = await RentalPackage.find(query);
+        if (Array.isArray(rules)) {
+            rules.sort((a, b) => {
+                if ((a.packageHours || 0) !== (b.packageHours || 0)) {
+                    return (a.packageHours || 0) - (b.packageHours || 0);
+                }
+                if ((a.carCategory || '') !== (b.carCategory || '')) {
+                    return (a.carCategory || '').localeCompare(b.carCategory || '');
+                }
+                return (a.state || '').localeCompare(b.state || '');
+            });
+        }
         res.status(200).json(rules);
     } catch (error) {
         res.status(500).json({ message: error.message });

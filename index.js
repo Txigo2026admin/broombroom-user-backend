@@ -42,6 +42,14 @@ app.get('/', (req, res) => {
     res.send('Broom Boom Cabs User Backend API is running...');
 });
 
+// Global process error handlers to prevent unexpected exits
+process.on('uncaughtException', (err) => {
+    console.error('[Process] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('[Process] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
 // Only listen locally — Vercel imports `app` directly and handles requests itself
 if (process.env.NODE_ENV !== 'production') {
     const PORT = process.env.PORT || 5004;

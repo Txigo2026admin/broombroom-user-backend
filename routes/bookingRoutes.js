@@ -1,8 +1,9 @@
 const express = require('express');
 const router = express.Router();
 const { getBookings, createBooking, updateBookingStatus, calculateFare, getPilots } = require('../controllers/bookingController');
+const { protect } = require('../middleware/authMiddleware');
 
-router.get('/', getBookings);
+router.get('/', protect, getBookings);
 router.get('/pilots', getPilots);
 router.post('/', createBooking);
 router.post('/calculate-fare', calculateFare);
