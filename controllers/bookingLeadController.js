@@ -67,28 +67,53 @@ exports.createBookingLead = async (req, res) => {
         const userAgent = req.headers['user-agent'] || null;
 
         // Deduplication & Lead Linking check:
-        // If customer mobile is provided, check if an existing lead from this user/IP in the last 15 minutes can be updated with their phone
+        // Case 1: If phone is provided, check if an unattached guest lead from this IP and matching route exists in last 15 mins to upgrade it
+        // Case 2: If same phone & same route within 60 seconds (rapid re-search), refresh timestamp instead of creating duplicate
+        // Case 3: If guest search with same IP & same route within 60 seconds, refresh timestamp
+        // For any different route or trip type, ALWAYS create a new distinct lead!
         const fifteenMinsAgo = new Date(Date.now() - 15 * 60 * 1000);
         const oneMinuteAgo = new Date(Date.now() - 60 * 1000);
 
         let existingLead = null;
-        if (cleanPhone) {
+
+        // Try upgrading an unattached guest lead for this route
+        if (cleanPhone && clientIp) {
             existingLead = await BookingLead.findOne({
                 where: {
-                    [Op.or]: [
-                        { customerMobile: cleanPhone },
-                        ...(clientIp ? [{ ipAddress: clientIp, customerMobile: null }] : [])
-                    ],
+                    customerMobile: null,
+                    ipAddress: clientIp,
+                    fromCity: cleanFromCity,
+                    serviceType: resolvedServiceType,
+                    ...(cleanToCity ? { toCity: cleanToCity } : {}),
                     createdAt: { [Op.gte]: fifteenMinsAgo }
                 },
                 order: [['createdAt', 'DESC']]
             });
-        } else if (clientIp) {
+        }
+
+        // Check for rapid duplicate submission for the EXACT same route by same phone
+        if (!existingLead && cleanPhone) {
             existingLead = await BookingLead.findOne({
                 where: {
+                    customerMobile: cleanPhone,
                     fromCity: cleanFromCity,
                     serviceType: resolvedServiceType,
+                    ...(cleanToCity ? { toCity: cleanToCity } : {}),
+                    createdAt: { [Op.gte]: oneMinuteAgo }
+                },
+                order: [['createdAt', 'DESC']]
+            });
+        }
+
+        // Check for rapid duplicate submission for the EXACT same route by same guest IP
+        if (!existingLead && !cleanPhone && clientIp) {
+            existingLead = await BookingLead.findOne({
+                where: {
+                    customerMobile: null,
                     ipAddress: clientIp,
+                    fromCity: cleanFromCity,
+                    serviceType: resolvedServiceType,
+                    ...(cleanToCity ? { toCity: cleanToCity } : {}),
                     createdAt: { [Op.gte]: oneMinuteAgo }
                 },
                 order: [['createdAt', 'DESC']]
@@ -114,6 +139,7 @@ exports.createBookingLead = async (req, res) => {
                 distanceKm: distanceKm ?? existingLead.distanceKm,
                 durationMinutes: durationMinutes ?? existingLead.durationMinutes,
                 estimatedFare: estimatedFare ?? existingLead.estimatedFare,
+                rawSearchParams: rawSearchParams || req.body || existingLead.rawSearchParams,
                 searchedAt: new Date()
             });
 
@@ -243,20 +269,22 @@ exports.getBookingLeads = async (req, res) => {
     }
 };
 
+// Helper to safely match ID or leadId without PostgreSQL UUID syntax errors
+const buildIdWhere = (id) => {
+    if (!id) return { id: null };
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(id));
+    return isUuid ? { [Op.or]: [{ id }, { leadId: String(id) }] } : { leadId: String(id) };
+};
+
 /**
- * @desc    Get single booking lead by ID
+ * @desc    Get single booking lead by ID or LeadId
  * @route   GET /api/booking-leads/:id
  */
 exports.getBookingLeadById = async (req, res) => {
     try {
         const { id } = req.params;
         const lead = await BookingLead.findOne({
-            where: {
-                [Op.or]: [
-                    { id: id },
-                    { leadId: id }
-                ]
-            }
+            where: buildIdWhere(id)
         });
 
         if (!lead) {
@@ -289,12 +317,7 @@ exports.updateBookingLead = async (req, res) => {
         const updates = req.body;
 
         const lead = await BookingLead.findOne({
-            where: {
-                [Op.or]: [
-                    { id: id },
-                    { leadId: id }
-                ]
-            }
+            where: buildIdWhere(id)
         });
 
         if (!lead) {
@@ -328,12 +351,7 @@ exports.deleteBookingLead = async (req, res) => {
     try {
         const { id } = req.params;
         const lead = await BookingLead.findOne({
-            where: {
-                [Op.or]: [
-                    { id: id },
-                    { leadId: id }
-                ]
-            }
+            where: buildIdWhere(id)
         });
 
         if (!lead) {
