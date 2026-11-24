@@ -228,6 +228,11 @@ const Booking = sequelize.define(
             defaultValue: 0
         },
 
+        rideAdvance: {
+            type: DataTypes.FLOAT,
+            defaultValue: 0
+        },
+
         dueFare: {
             type: DataTypes.FLOAT,
             defaultValue: 0
@@ -292,6 +297,12 @@ const Booking = sequelize.define(
         tollTax: {
             type: DataTypes.STRING,
             defaultValue: 'Excluded'
+        },
+
+        exclusions: {
+            type: DataTypes.JSONB,
+            allowNull: true,
+            defaultValue: []
         },
 
         // =====================================================

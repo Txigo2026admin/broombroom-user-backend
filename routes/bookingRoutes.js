@@ -27,6 +27,10 @@ router.get('/', (req, res, next) => {
     if (isExplicitUser) {
         return protect(req, res, () => getBookings(req, res));
     }
+    // If mobile or phone or email query is provided (e.g. from app without token or international user)
+    if (req.query.mobile || req.query.phone || req.query.email) {
+        return getBookings(req, res);
+    }
     return getAllBookingsAdmin(req, res);
 });
 

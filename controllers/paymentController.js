@@ -31,8 +31,20 @@ const formatBooking = (b) => ({
     status: b.status,
     fare: Number(b.fare || 0),
     advance: Number(b.advance || 0),
+    rideAdvance: Number(b.rideAdvance || (b.advance ? Number((b.advance * 1.08).toFixed(2)) : 0)),
     dueFare: Number(b.dueFare || 0),
     paidAmount: Number(b.paidAmount || 0),
+    companyShare: Number(b.companyShare || (b.paidAmount > 0 ? b.paidAmount : b.advance) || 0),
+    driverShare: Number(b.driverShare || b.dueFare || 0),
+    addonAmount: Number(b.addonAmount || 0),
+    addons: b.addons || {},
+    isAdvancedPayment: b.isAdvancedPayment || (b.paidAmount > 0 || b.paymentStatus === 'SUCCESS' ? 'Yes' : 'No'),
+    extraKm: b.extraKm,
+    extraHour: b.extraHour,
+    waitingCharges: b.waitingCharges,
+    nightAllowance: b.nightAllowance,
+    tollTax: b.tollTax || 'Excluded',
+    exclusions: b.exclusions || [],
     paymentStatus: b.paymentStatus,
     paymentMethod: b.paymentMethod,
     orderId: b.cashfreeOrderId
@@ -86,13 +98,18 @@ exports.createPaymentOrder = async (req, res) => {
         }
 
         // ----------------------------------------------------
-        // Advance amount
+        // Advance amount (customer pays rideAdvance = advance + 5% + 3% GST charges)
         // ----------------------------------------------------
 
-        let amount = Number(booking.advance || 0);
+        let amount = Number(booking.rideAdvance || 0);
 
         if (!amount || amount <= 0) {
-            amount = Number(booking.fare ? (booking.fare * 0.25).toFixed(2) : 100);
+            const adv = Number(booking.advance || 0);
+            if (adv > 0) {
+                amount = Number((adv + (adv * 0.05) + (adv * 0.03)).toFixed(2));
+            } else {
+                amount = Number(booking.fare ? (booking.fare * 0.25).toFixed(2) : 100);
+            }
         }
 
         // ----------------------------------------------------
@@ -492,11 +509,14 @@ exports.checkPaymentStatus = async (req, res) => {
             const paidAmount = Number(
                 (successfulPayment && successfulPayment.payment_amount) ||
                 orderPaidAmount ||
+                booking.rideAdvance ||
                 booking.advance ||
                 0
             );
 
-            const dueFare = Math.max(0, Number(booking.fare) - paidAmount);
+            // Due fare is fare minus base advance (payable to driver)
+            const baseAdvance = Number(booking.advance || 0);
+            const dueFare = Math.max(0, Number(booking.fare) - (baseAdvance > 0 ? baseAdvance : paidAmount));
             const paymentMethod = (successfulPayment && (successfulPayment.payment_group || successfulPayment.payment_method)) || 'Cashfree';
 
             await booking.update({
@@ -505,7 +525,10 @@ exports.checkPaymentStatus = async (req, res) => {
                 paymentMethod: paymentMethod,
                 paymentDate: new Date(),
                 status: 'Confirmed',
-                dueFare: dueFare
+                dueFare: dueFare,
+                isAdvancedPayment: 'Yes',
+                companyShare: paidAmount,
+                driverShare: dueFare
             });
 
             return res.status(200).json({

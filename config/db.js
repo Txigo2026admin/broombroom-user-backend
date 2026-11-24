@@ -48,8 +48,21 @@ const connectDB = async () => {
     }
 
     connectionPromise = sequelize.authenticate()
-        .then(() => {
+        .then(async () => {
             console.log('PostgreSQL connected successfully');
+            try {
+                await sequelize.query(`
+                    ALTER TABLE bookings
+                    ADD COLUMN IF NOT EXISTS "rideAdvance" FLOAT DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS "companyShare" FLOAT DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS "driverShare" FLOAT DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS "addonAmount" FLOAT DEFAULT 0,
+                    ADD COLUMN IF NOT EXISTS "isAdvancedPayment" VARCHAR(20) DEFAULT 'No',
+                    ADD COLUMN IF NOT EXISTS "exclusions" JSONB DEFAULT '[]'::jsonb;
+                `);
+            } catch (migErr) {
+                console.warn('Booking column auto-migration notice:', migErr.message);
+            }
             return true;
         })
         .catch((error) => {

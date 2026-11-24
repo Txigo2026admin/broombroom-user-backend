@@ -145,12 +145,18 @@ exports.createBookingAdmin = async (req, res) => {
         if (!data.vehicleCategory) data.vehicleCategory = 'Sedan';
         if (!data.seater) data.seater = 4;
         if (!data.source) data.source = 'Admin Portal';
-        if (!data.status) data.status = 'Pending';
+
+        // Calculate and normalize commercials (advance, rideAdvance, dueFare, companyShare, driverShare, addonAmount, exclusions, status, paymentStatus)
+        const { calculateBookingCommercials } = require('../utils/bookingPricingHelper');
+        const commercials = calculateBookingCommercials(data);
+        Object.assign(data, commercials);
 
         if (!Array.isArray(data.timeline)) {
             data.timeline = [{
                 status: data.status,
-                message: 'Booking created via Admin Portal',
+                message: data.status === 'Confirmed'
+                    ? (commercials.isBookAtZero ? 'Booking confirmed via Admin Portal (Book at ₹0)' : 'Booking confirmed via Admin Portal')
+                    : 'Booking created via Admin Portal',
                 timestamp: new Date().toISOString()
             }];
         }
@@ -194,6 +200,18 @@ exports.updateBookingAdmin = async (req, res) => {
 
         const updates = { ...req.body };
         delete updates.id; // Protect primary key
+
+        // If payment status or paidAmount is updated, maintain isAdvancedPayment & companyShare
+        const isPaid = updates.paymentStatus === 'SUCCESS' ||
+            Number(updates.paidAmount || 0) > 0 ||
+            String(updates.isAdvancedPayment || '').toLowerCase() === 'yes';
+
+        if (isPaid) {
+            updates.isAdvancedPayment = 'Yes';
+            if (updates.companyShare === undefined && (updates.paidAmount || updates.advance)) {
+                updates.companyShare = Number(updates.paidAmount || updates.advance || booking.advance || 0);
+            }
+        }
 
         // If status changed, record in timeline
         if (updates.status && updates.status !== booking.status) {

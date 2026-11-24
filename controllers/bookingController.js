@@ -7,40 +7,59 @@ const User = require('../models/User');
 // @route   GET /api/bookings
 exports.getBookings = async (req, res) => {
     try {
-        if (!req.user?.id) {
-            return res.status(401).json({
-                message: 'Please login first'
-            });
+        let mobile = req.query.mobile || req.query.phone || '';
+        let email = req.query.email || '';
+
+        // If authenticated via JWT token:
+        if (req.user?.id) {
+            const user = await User.findByPk(req.user.id);
+            if (user) {
+                if (!mobile && user.phone) mobile = user.phone;
+                if (!email && user.email) email = user.email;
+            }
         }
 
-        const user = await User.findByPk(req.user.id);
+        const cleanMobile = String(mobile || '').trim();
+        const digitsOnly = cleanMobile.replace(/\D/g, '');
+        const cleanEmail = String(email || '').trim().toLowerCase();
 
-        if (!user || !user.phone) {
-            return res.status(403).json({
-                message: 'Registered mobile number not found'
-            });
+        const orConditions = [];
+
+        if (digitsOnly.length >= 7) {
+            if (digitsOnly.length >= 10) {
+                const last10 = digitsOnly.slice(-10);
+                orConditions.push(
+                    { customerMobile: { [Op.like]: `%${last10}` } },
+                    { customerMobile: last10 },
+                    { customerMobile: `91${last10}` },
+                    { customerMobile: `+91${last10}` },
+                    { customerMobile: `+91 ${last10}` }
+                );
+            } else {
+                orConditions.push(
+                    { customerMobile: { [Op.like]: `%${digitsOnly}%` } }
+                );
+            }
+        } else if (cleanMobile.length > 0) {
+            orConditions.push(
+                { customerMobile: { [Op.like]: `%${cleanMobile}%` } }
+            );
         }
 
-        const digits = String(user.phone).replace(/\D/g, '');
-
-        if (!/^(?:91)?[6-9]\d{9}$/.test(digits)) {
-            return res.status(400).json({
-                message: 'Invalid registered mobile number'
-            });
+        if (cleanEmail && cleanEmail.includes('@')) {
+            orConditions.push(
+                { customerEmail: { [Op.iLike]: cleanEmail } }
+            );
         }
 
-        const mobile = digits.slice(-10);
+        // If no user phone or email is identified, return empty list safely
+        if (orConditions.length === 0) {
+            return res.status(200).json([]);
+        }
 
         const bookings = await Booking.findAll({
             where: {
-                customerMobile: {
-                    [Op.in]: [
-                        mobile,
-                        `91${mobile}`,
-                        `+91${mobile}`,
-                        `+91 ${mobile}`
-                    ]
-                }
+                [Op.or]: orConditions
             },
             order: [['createdAt', 'DESC']]
         });
@@ -157,6 +176,22 @@ exports.createBooking = async (req, res) => {
             } catch (_) {}
         }
 
+        // Calculate and normalize commercials (advance, rideAdvance, dueFare, companyShare, driverShare, addonAmount, exclusions, status, paymentStatus)
+        const { calculateBookingCommercials } = require('../utils/bookingPricingHelper');
+        const commercials = calculateBookingCommercials(bookingData);
+        Object.assign(bookingData, commercials);
+
+        // Auto-initialize timeline if empty
+        if (!Array.isArray(bookingData.timeline) || bookingData.timeline.length === 0) {
+            bookingData.timeline = [{
+                status: bookingData.status,
+                message: bookingData.status === 'Confirmed'
+                    ? (commercials.isBookAtZero ? 'Booking confirmed (Book at ₹0 Advance)' : 'Booking confirmed')
+                    : 'Booking created, awaiting advance payment',
+                timestamp: new Date().toISOString()
+            }];
+        }
+
         const booking = await Booking.create(bookingData);
 
         // Auto-sync customer as a User Lead in `users` table
@@ -223,9 +258,17 @@ exports.createBooking = async (req, res) => {
 // @route   PATCH /api/bookings/:id
 exports.updateBookingStatus = async (req, res) => {
     try {
+        const updateData = { ...req.body };
+        if (updateData.paymentStatus === 'SUCCESS' || Number(updateData.paidAmount || 0) > 0 || String(updateData.isAdvancedPayment || '').toLowerCase() === 'yes') {
+            updateData.isAdvancedPayment = 'Yes';
+            if (updateData.paidAmount && !updateData.companyShare) {
+                updateData.companyShare = Number(updateData.paidAmount);
+            }
+        }
+
         const booking = await Booking.findByIdAndUpdate(
             req.params.id, 
-            { $set: req.body }, 
+            { $set: updateData }, 
             { new: true, runValidators: true }
         );
         if (!booking) return res.status(404).json({ message: 'Booking not found' });
@@ -267,6 +310,11 @@ exports.calculateFare = async (req, res) => {
         const result = await pricingService.calculatePrice(params);
 
         if (result.success) {
+            const adv = Number(result.advance || 0);
+            const rideAdv = adv > 0 ? Number((adv + (adv * 0.05) + (adv * 0.03)).toFixed(2)) : 0;
+            const due = result.dueFare !== undefined ? Number(result.dueFare) : Math.max(0, (result.fare || 0) - adv);
+            const addonAmt = Number(result.details?.addonTotal || 0);
+
             res.status(200).json({
                 baseFare: result.details.baseFare || 0,
                 perKmRate: result.details.ratePerKm || 0,
@@ -274,8 +322,12 @@ exports.calculateFare = async (req, res) => {
                 multiplier: result.multiplier,
                 totalFare: result.fare,
                 fare: result.fare,
-                advance: result.advance,
-                dueFare: result.dueFare,
+                advance: adv,
+                rideAdvance: rideAdv,
+                dueFare: due,
+                companyShare: adv,
+                driverShare: due,
+                addonAmount: addonAmt,
                 details: result.details,
                 appliedRule: result.appliedRule,
                 success: true
@@ -287,7 +339,11 @@ exports.calculateFare = async (req, res) => {
                 totalFare: 0,
                 fare: 0,
                 advance: 0,
-                dueFare: 0
+                rideAdvance: 0,
+                dueFare: 0,
+                companyShare: 0,
+                driverShare: 0,
+                addonAmount: 0
             });
         }
     } catch (error) {
