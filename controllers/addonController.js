@@ -103,7 +103,9 @@ const updateAddons = async (req, res) => {
             key: item.key || (item.name || '').toLowerCase().replace(/[^a-z0-9]/g, '_'),
             name: item.name,
             price: Number(item.price) || 0,
-            description: item.description || ''
+            description: item.description || '',
+            isActive: item.isActive !== false,
+            isPopular: Boolean(item.isPopular)
         }));
 
         let setting = await GlobalSetting.findOne({

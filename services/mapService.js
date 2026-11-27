@@ -39,7 +39,6 @@ function resolveAlias(query) {
     if (KNOWN_ALIASES[clean]) {
         return KNOWN_ALIASES[clean];
     }
-    // Check without spaces
     const noSpaces = clean.replace(/\s+/g, '');
     if (KNOWN_ALIASES[noSpaces]) {
         return KNOWN_ALIASES[noSpaces];
@@ -287,7 +286,7 @@ async function searchGooglePlacesText(query) {
                     const displayName = place.formattedAddress || place.displayName?.text || query;
                     const name = place.displayName?.text || query.split(',')[0].trim();
 
-                    // Asynchronously save to DB
+                    // Save to DB so future lookups resolve from DB/Redis instead of Google
                     saveOrUpdateCity({
                         name,
                         displayName,
@@ -315,8 +314,8 @@ async function searchGooglePlacesText(query) {
     return null;
 }
 
-// ---------- Google Places API Multi-Result Search for Micro & Small Locations ----------
-async function searchGooglePlaces(query, limit = 5) {
+// ---------- Google Places API Multi-Result Search (Fallback only when Cache, DB & OSM fail/return nothing) ----------
+async function searchGooglePlaces(query, limit = 10) {
     const apiKey = getGoogleApiKey();
     if (!apiKey || !query) return [];
     try {
@@ -378,6 +377,7 @@ async function searchGooglePlaces(query, limit = 5) {
                             placeId: place.id,
                             source: 'GoogleMaps'
                         };
+                        // Save to DB so future searches resolve from DB/Redis without hitting Google
                         saveOrUpdateCity(item).catch(() => {});
                         return item;
                     }
@@ -408,17 +408,17 @@ async function searchGooglePlaces(query, limit = 5) {
 }
 
 // Legacy alias maintained for existing callers
-async function searchGooglePlacesAutocomplete(query, limit = 5) {
+async function searchGooglePlacesAutocomplete(query, limit = 10) {
     return await searchGooglePlaces(query, limit);
 }
 
-// ---------- Geocode address/city via Redis -> DB (Stage 1) -> OSM (Stage 2) -> Google Places (Stage 3) ----------
+// ---------- Geocode address/city via Redis -> DB -> OSM -> Google (only if Cache/DB/OSM fail or miss) ----------
 async function getCoordinates(query) {
     if (!query || typeof query !== 'string') return null;
     const cleanQuery = normalizeQuery(query);
     if (!cleanQuery) return null;
 
-    // Check Redis / Memory cache first (< 1ms)
+    // 0. Check Redis / Memory cache first (< 1ms)
     const geoCacheKey = `bb:map:geo:${cleanQuery.toLowerCase()}`;
     const cachedGeo = await redisService.get(geoCacheKey);
     if (cachedGeo && cachedGeo.lat != null && cachedGeo.lng != null) {
@@ -440,7 +440,7 @@ async function _resolveCoordinates(cleanQuery) {
     const aliased = resolveAlias(cleanQuery);
     const effectiveQuery = aliased || cleanQuery;
 
-    // Stage 1: Try Database lookup first
+    // Stage 1: Database lookup first
     try {
         const primaryName = effectiveQuery.split(',')[0].trim();
         const escapedFull = effectiveQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -472,7 +472,7 @@ async function _resolveCoordinates(cleanQuery) {
             });
         }
 
-        if (!cityInDb) {
+        if (!cityInDb && primaryName.length > 1) {
             cityInDb = await City.findOne({
                 displayName: { $regex: new RegExp(escapedPrimary, 'i') }
             });
@@ -558,11 +558,22 @@ async function _resolveCoordinates(cleanQuery) {
         }
     }
 
-    // Stage 3: Google Maps (Google Places Text Search - if DB and OSM fail)
+    // Stage 3: Google Maps - ONLY called if Cache, DB, and OSM all failed or returned nothing
     try {
         const googleGeo = await searchGooglePlacesText(effectiveQuery) || (aliased ? await searchGooglePlacesText(cleanQuery) : null);
         if (googleGeo && googleGeo.lat != null && googleGeo.lng != null) {
             return googleGeo;
+        }
+
+        const autoResults = await searchGooglePlaces(effectiveQuery, 1);
+        if (Array.isArray(autoResults) && autoResults.length > 0 && autoResults[0].lat && autoResults[0].lon) {
+            return {
+                lat: parseFloat(autoResults[0].lat),
+                lng: parseFloat(autoResults[0].lon),
+                displayName: autoResults[0].displayName || effectiveQuery,
+                state: autoResults[0].state || '',
+                source: 'GoogleMaps'
+            };
         }
     } catch (gErr) {
         console.warn(`[MapService] Google Places geocoding failed for "${effectiveQuery}":`, gErr.message);
@@ -594,13 +605,13 @@ async function _resolveCoordinates(cleanQuery) {
     return null;
 }
 
-// ---------- 3-Stage Autocomplete / Location Search (Redis -> DB -> OSM -> Google Maps) ----------
+// ---------- Location Search: All matches from Cache -> DB + OSM (NO Google unless Cache/DB/OSM fail or return 0) ----------
 async function searchLocations(query) {
     if (!query || typeof query !== 'string') return [];
     const cleanQuery = normalizeQuery(query);
     if (cleanQuery.length < 2) return [];
 
-    // 0. Check Redis / in-memory cache first (< 1ms)
+    // 0. Check Redis / in-memory cache first (< 1ms) — skips DB, OSM, and Google completely
     const searchCacheKey = `bb:map:search:${cleanQuery.toLowerCase()}`;
     const cachedResults = await redisService.get(searchCacheKey);
     if (Array.isArray(cachedResults) && cachedResults.length > 0) {
@@ -614,30 +625,35 @@ async function searchLocations(query) {
     const aliased = resolveAlias(cleanQuery);
     const searchQuery = aliased || cleanQuery;
 
-    // Helper to safely add results and avoid duplicates
+    let dbFailed = false;
+    let osmFailed = false;
+
+    // Helper to merge DB & OSM locations while avoiding exact duplicates
     function addResult(item) {
         if (!item || !item.lat || !item.lon) return false;
         const latNum = parseFloat(item.lat);
         const lonNum = parseFloat(item.lon);
         if (isNaN(latNum) || isNaN(lonNum)) return false;
 
-        // Check duplicate by placeId
         if (item.placeId && seenIds.has(String(item.placeId))) return false;
 
-        // Check duplicate by normalized name
         const normName = String(item.name || '').trim().toLowerCase();
+        const primaryName = normName.split(',')[0].trim();
+
         if (normName && seenNames.has(normName)) {
-            // Check if coordinates are also close (< 500m)
             for (const r of results) {
                 const d = calculateHaversineDistance(latNum, lonNum, parseFloat(r.lat), parseFloat(r.lon));
-                if (d < 0.5) return false;
+                if (d < 1.5) return false;
             }
         }
 
-        // Check proximity with existing results (within 100 meters)
         for (const r of results) {
+            const rPrimary = String(r.name || '').trim().toLowerCase().split(',')[0].trim();
             const d = calculateHaversineDistance(latNum, lonNum, parseFloat(r.lat), parseFloat(r.lon));
-            if (d < 0.1) return false;
+            // Deduplicate identical place names at the same spot (e.g. "Kolkata" vs "Kolkata, West Bengal, India")
+            if (primaryName && rPrimary === primaryName && d < 1.5) return false;
+            // Deduplicate exact same coordinates (< 50m)
+            if (d < 0.05) return false;
         }
 
         if (item.placeId) seenIds.add(String(item.placeId));
@@ -647,7 +663,7 @@ async function searchLocations(query) {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // STAGE 1: Search Local Database (City collection / cached places)
+    // STAGE 1: Collect all matching places from Local Database
     // ─────────────────────────────────────────────────────────────
     try {
         const escaped = cleanQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -656,7 +672,7 @@ async function searchLocations(query) {
                 { name: { $regex: new RegExp(escaped, 'i') } },
                 { displayName: { $regex: new RegExp(escaped, 'i') } }
             ]
-        }).limit(6);
+        }).limit(30);
 
         for (const c of dbCities) {
             addResult({
@@ -671,84 +687,87 @@ async function searchLocations(query) {
             });
         }
     } catch (e) {
+        dbFailed = true;
         console.warn('[MapService] DB search error:', e.message);
     }
 
     // ─────────────────────────────────────────────────────────────
-    // STAGE 2: Google Maps (Google Places Autocomplete API) - Fast & Accurate
+    // STAGE 2: Always query OpenStreetMap (Nominatim) so ALL possible
+    //          locations from DB + OSM are shown together
     // ─────────────────────────────────────────────────────────────
     try {
-        const googleResults = await searchGooglePlaces(searchQuery, 6);
-        for (const place of googleResults) {
-            addResult(place);
-        }
-    } catch (gErr) {
-        console.warn('[MapService] Google Places stage error:', gErr.message);
-    }
+        const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
+        const queries = [searchQuery];
+        if (searchQuery !== cleanQuery) queries.push(cleanQuery);
 
-    // ─────────────────────────────────────────────────────────────
-    // STAGE 3: OpenStreetMap (Nominatim API) - Fallback if more results needed
-    // ─────────────────────────────────────────────────────────────
-    if (results.length < 6) {
-        let osmResultsCount = 0;
-        try {
-            const isPin = /^[1-9][0-9]{5}$/.test(cleanQuery.trim());
-            const queries = [searchQuery];
-            if (searchQuery !== cleanQuery) queries.push(cleanQuery);
+        for (const q of queries) {
+            const nomUrl = getNominatimUrl();
+            const url = isPin
+                ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=15`
+                : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=15&countrycodes=in`;
 
-            for (const q of queries) {
-                const nomUrl = getNominatimUrl();
-                const url = isPin
-                    ? `${nomUrl}/search?postalcode=${encodeURIComponent(q.trim())}&country=in&format=json&addressdetails=1&limit=6`
-                    : `${nomUrl}/search?q=${encodeURIComponent(q)}&format=json&addressdetails=1&limit=6&countrycodes=in`;
+            const res = await fetch(url, {
+                headers: {
+                    'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
+                    'Accept': 'application/json'
+                },
+                signal: AbortSignal.timeout(4000)
+            });
 
-                const res = await fetch(url, {
-                    headers: {
-                        'User-Agent': 'BroomBoomCabs/1.0 (contact@broomboom.com)',
-                        'Accept': 'application/json'
-                    },
-                    signal: AbortSignal.timeout(2000)
-                });
+            if (res.ok) {
+                const data = await res.json();
+                if (Array.isArray(data)) {
+                    for (const item of data) {
+                        if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
+                            continue;
+                        }
 
-                if (res.ok) {
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        for (const item of data) {
-                            if (/^new\s*town/i.test(cleanQuery) && /islampur|dinajpur/i.test(item.display_name)) {
-                                continue;
-                            }
+                        const added = addResult({
+                            name: item.display_name,
+                            displayName: item.display_name,
+                            lat: String(item.lat),
+                            lon: String(item.lon),
+                            state: item.address?.state || '',
+                            country: item.address?.country || 'India',
+                            placeId: item.place_id ? String(item.place_id) : undefined,
+                            source: 'OpenStreetMap'
+                        });
 
-                            const added = addResult({
+                        if (added) {
+                            saveOrUpdateCity({
                                 name: item.display_name,
                                 displayName: item.display_name,
-                                lat: String(item.lat),
-                                lon: String(item.lon),
+                                lat: item.lat,
+                                lon: item.lon,
                                 state: item.address?.state || '',
                                 country: item.address?.country || 'India',
-                                placeId: item.place_id ? String(item.place_id) : undefined,
-                                source: 'OpenStreetMap'
-                            });
-
-                            if (added) {
-                                osmResultsCount++;
-                                // Asynchronously cache in DB
-                                saveOrUpdateCity({
-                                    name: item.display_name,
-                                    displayName: item.display_name,
-                                    lat: item.lat,
-                                    lon: item.lon,
-                                    state: item.address?.state || '',
-                                    country: item.address?.country || 'India',
-                                    placeId: item.place_id ? String(item.place_id) : undefined
-                                }).catch(() => {});
-                            }
+                                placeId: item.place_id ? String(item.place_id) : undefined
+                            }).catch(() => {});
                         }
                     }
                 }
-                if (results.length >= 8) break;
+            } else {
+                osmFailed = true;
+                console.warn('[MapService] Nominatim HTTP error:', res.status);
             }
-        } catch (e) {
-            // Silently continue if Nominatim is slow or unreachable
+        }
+    } catch (e) {
+        osmFailed = true;
+        console.warn('[MapService] Nominatim search error:', e.message);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // STAGE 3: Google Maps — ONLY called if Cache, DB & OSM returned
+    //          0 results OR if DB/OSM failed and yielded no results
+    // ─────────────────────────────────────────────────────────────
+    if (results.length === 0 || (dbFailed && osmFailed)) {
+        try {
+            const googleResults = await searchGooglePlaces(searchQuery, 10);
+            for (const place of googleResults) {
+                addResult(place);
+            }
+        } catch (gErr) {
+            console.warn('[MapService] Google Places stage error:', gErr.message);
         }
     }
 
@@ -785,15 +804,14 @@ async function searchLocations(query) {
         }
     }
 
-    const finalResults = results.slice(0, 8);
-    if (finalResults.length > 0) {
+    if (results.length > 0) {
         // Cache in Redis for 24 hours (86400s)
-        redisService.set(searchCacheKey, finalResults, 86400).catch(() => {});
+        redisService.set(searchCacheKey, results, 86400).catch(() => {});
     }
-    return finalResults;
+    return results;
 }
 
-// ---------- Driving route and distance via Google Routes directly with OSRM fallback & Redis ----------
+// ---------- Driving route and distance via Google Routes with OSRM & Haversine fallback ----------
 async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
     const pLat = parseFloat(lat1);
     const pLng = parseFloat(lon1);
@@ -830,142 +848,284 @@ async function getDrivingDistanceByCoords(lat1, lon1, lat2, lon2) {
             redisService.set(distCacheKey, googleRoute, 1209600).catch(() => {});
             return googleRoute;
         }
-    } catch (gErr) {
-        console.warn('[MapService] Google Routes API failed, attempting OSRM fallback:', gErr.message);
+    } catch (e) {
+        console.warn('[MapService] Google Routes lookup error:', e.message);
     }
 
-    // 2. OpenStreetMap (OSRM) Fallback only if Google Routes fails
+    // 2. OSRM fallback
     try {
-        const url = `${getOsrmUrl()}/route/v1/driving/${pLng},${pLat};${dLng},${dLat}?overview=false`;
-        const res = await fetch(url, {
-            headers: { 'Accept': 'application/json' },
-            signal: AbortSignal.timeout(5000)
-        });
-
+        const osrmUrl = getOsrmUrl();
+        const url = `${osrmUrl}/route/v1/driving/${pLng},${pLat};${dLng},${dLat}?overview=false`;
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
         if (res.ok) {
             const data = await res.json();
             if (data.code === 'Ok' && Array.isArray(data.routes) && data.routes.length > 0) {
                 const route = data.routes[0];
-                const distanceKm = Math.round((route.distance / 1000) * 10) / 10;
-                const durationMinutes = Math.round(route.duration / 60);
-
+                const distanceKm = Math.round(((route.distance || 0) / 1000.0) * 10) / 10;
+                const durationMinutes = Math.round((route.duration || 0) / 60);
                 if (distanceKm > 0) {
-                    const routeData = {
+                    const osrmResult = {
                         distanceKm,
                         durationMinutes,
                         source: 'OSRM'
                     };
-                    // Cache in Redis for 14 days (1209600s)
-                    redisService.set(distCacheKey, routeData, 1209600).catch(() => {});
-                    return routeData;
+                    redisService.set(distCacheKey, osrmResult, 1209600).catch(() => {});
+                    return osrmResult;
                 }
             }
         }
     } catch (osrmErr) {
-        console.warn('[MapService] OSRM fallback failed:', osrmErr.message);
+        console.warn('[MapService] OSRM routing fallback failed:', osrmErr.message);
     }
 
-    return null;
-}
-
-// ---------- Combined: Get distance between two points ----------
-async function calculateDistanceBetween({
-    from,
-    to,
-    pickupLat,
-    pickupLng,
-    dropLat,
-    dropLng
-}) {
-    let pLat = pickupLat != null ? parseFloat(pickupLat) : null;
-    let pLng = pickupLng != null ? parseFloat(pickupLng) : null;
-    let dLat = dropLat != null ? parseFloat(dropLat) : null;
-    let dLng = dropLng != null ? parseFloat(dropLng) : null;
-
-    let pickupAddress = null;
-    let dropAddress = null;
-
-    if ((pLat === null || pLng === null || isNaN(pLat) || isNaN(pLng)) && from) {
-        const geo = await getCoordinates(from);
-        if (geo) {
-            pLat = geo.lat;
-            pLng = geo.lng;
-            pickupAddress = geo.displayName;
-        }
-    }
-
-    if ((dLat === null || dLng === null || isNaN(dLat) || isNaN(dLng)) && to) {
-        const geo = await getCoordinates(to);
-        if (geo) {
-            dLat = geo.lat;
-            dLng = geo.lng;
-            dropAddress = geo.displayName;
-        }
-    }
-
-    // 1. Driving route calculation (Google Routes first)
-    if (pLat != null && pLng != null && dLat != null && dLng != null) {
-        const routeData = await getDrivingDistanceByCoords(pLat, pLng, dLat, dLng);
-        if (routeData) {
-            return {
-                distanceKm: routeData.distanceKm,
-                durationMinutes: routeData.durationMinutes,
-                source: routeData.source,
-                pickupCoords: { lat: pLat, lng: pLng },
-                dropCoords: { lat: dLat, lng: dLng },
-                pickupAddress,
-                dropAddress
-            };
-        }
-
-        const fallbackKm = calculateHaversineDistance(pLat, pLng, dLat, dLng);
-        return {
-            distanceKm: fallbackKm,
-            durationMinutes: Math.round(fallbackKm * 1.5),
-            source: 'HaversineFallback',
-            pickupCoords: { lat: pLat, lng: pLng },
-            dropCoords: { lat: dLat, lng: dLng },
-            pickupAddress,
-            dropAddress
-        };
-    }
-
-    // 2. If coordinates could not be resolved from text, fallback to Google Routes with address strings
-    if (from && to) {
-        const googleRoute = await getGoogleDrivingDistance(null, null, null, null, from, to);
-        if (googleRoute && googleRoute.distanceKm > 0) {
-            return {
-                distanceKm: googleRoute.distanceKm,
-                durationMinutes: googleRoute.durationMinutes,
-                source: 'GoogleMaps',
-                pickupCoords: { lat: pLat, lng: pLng },
-                dropCoords: { lat: dLat, lng: dLng },
-                pickupAddress: pickupAddress || from,
-                dropAddress: dropAddress || to
-            };
-        }
-    }
-
+    // 3. Haversine straight-line fallback
+    const haversineKm = calculateHaversineDistance(pLat, pLng, dLat, dLng);
     return {
-        distanceKm: 0,
-        durationMinutes: 0,
-        source: 'NotFound',
-        pickupCoords: { lat: pLat, lng: pLng },
-        dropCoords: { lat: dLat, lng: dLng },
-        pickupAddress,
-        dropAddress
+        distanceKm: haversineKm,
+        durationMinutes: Math.round((haversineKm / 40) * 60),
+        source: 'Haversine'
     };
 }
 
+// ---------- Unified Distance Calculator (supports single object, 2 endpoints, or 4 coords) ----------
+async function calculateDistanceBetween(origin, destination, arg3, arg4) {
+    const emptyFallback = (p1 = null, p2 = null, reason = 'UnresolvedFallback') => ({
+        distanceKm: 0,
+        distance: 0,
+        durationMinutes: 0,
+        source: reason,
+        origin: p1,
+        destination: p2
+    });
+
+    // Signature A: Single payload object -> calculateDistanceBetween({ pickup, drop, pLat, pLng, dLat, dLng, ... })
+    if (destination === undefined && origin && typeof origin === 'object' && !Array.isArray(origin)) {
+        const obj = origin;
+
+        const rawOrigin =
+            obj.origin ??
+            obj.pickup ??
+            obj.pickupCity ??
+            obj.pickupLocation ??
+            obj.pickupAddress ??
+            obj.from ??
+            obj.fromCity ??
+            obj.fromLocation ??
+            obj.source ??
+            obj.sourceCity ??
+            obj.sourceLocation ??
+            obj.start ??
+            obj.startLocation ??
+            obj.originCity ??
+            obj.originAddress;
+
+        const rawDest =
+            obj.destination ??
+            obj.drop ??
+            obj.dropoff ??
+            obj.dropCity ??
+            obj.dropoffCity ??
+            obj.dropLocation ??
+            obj.dropoffLocation ??
+            obj.dropAddress ??
+            obj.dropoffAddress ??
+            obj.to ??
+            obj.toCity ??
+            obj.toLocation ??
+            obj.dest ??
+            obj.destCity ??
+            obj.destAddress ??
+            obj.destinationCity ??
+            obj.destinationAddress ??
+            obj.end ??
+            obj.endLocation;
+
+        const pCoords = obj.pickupCoords || obj.pickupCoordinates || obj.originCoords || obj.originCoordinates || obj.fromCoords;
+        const dCoords = obj.dropCoords || obj.dropoffCoords || obj.dropCoordinates || obj.dropoffCoordinates || obj.destCoords || obj.destinationCoords || obj.toCoords;
+
+        const pLat =
+            obj.pLat ?? obj.pickupLat ?? obj.originLat ?? obj.fromLat ?? obj.sourceLat ?? obj.startLat ?? obj.lat1 ??
+            (Array.isArray(pCoords) ? pCoords[0] : (pCoords?.lat ?? pCoords?.latitude));
+        const pLng =
+            obj.pLng ?? obj.pLon ?? obj.pickupLng ?? obj.pickupLon ?? obj.originLng ?? obj.originLon ?? obj.fromLng ?? obj.fromLon ?? obj.sourceLng ?? obj.sourceLon ?? obj.startLng ?? obj.startLon ?? obj.lng1 ?? obj.lon1 ??
+            (Array.isArray(pCoords) ? pCoords[1] : (pCoords?.lng ?? pCoords?.lon ?? pCoords?.longitude));
+
+        const dLat =
+            obj.dLat ?? obj.dropLat ?? obj.dropoffLat ?? obj.destLat ?? obj.destinationLat ?? obj.toLat ?? obj.endLat ?? obj.lat2 ??
+            (Array.isArray(dCoords) ? dCoords[0] : (dCoords?.lat ?? dCoords?.latitude));
+        const dLng =
+            obj.dLng ?? obj.dLon ?? obj.dropLng ?? obj.dropLon ?? obj.dropoffLng ?? obj.dropoffLon ?? obj.destLng ?? obj.destLon ?? obj.destinationLng ?? obj.destinationLon ?? obj.toLng ?? obj.toLon ?? obj.endLng ?? obj.endLon ?? obj.lng2 ?? obj.lon2 ??
+            (Array.isArray(dCoords) ? dCoords[1] : (dCoords?.lng ?? dCoords?.lon ?? dCoords?.longitude));
+
+        if (pLat != null && pLng != null) {
+            origin = {
+                ...(typeof rawOrigin === 'object' && rawOrigin !== null ? rawOrigin : {}),
+                lat: pLat,
+                lng: pLng,
+                address: typeof rawOrigin === 'string' ? rawOrigin : (rawOrigin?.address || rawOrigin?.displayName || rawOrigin?.name || '')
+            };
+        } else {
+            origin = rawOrigin;
+        }
+
+        if (dLat != null && dLng != null) {
+            destination = {
+                ...(typeof rawDest === 'object' && rawDest !== null ? rawDest : {}),
+                lat: dLat,
+                lng: dLng,
+                address: typeof rawDest === 'string' ? rawDest : (rawDest?.address || rawDest?.displayName || rawDest?.name || '')
+            };
+        } else {
+            destination = rawDest;
+        }
+    }
+
+    // Signature B: 4 primitive coordinate args -> calculateDistanceBetween(lat1, lon1, lat2, lon2)
+    if (
+        arguments.length >= 4 &&
+        (arg3 == null || typeof arg3 !== 'object') &&
+        (arg4 == null || typeof arg4 !== 'object')
+    ) {
+        const route = await getDrivingDistanceByCoords(origin, destination, arg3, arg4);
+        return route ? { ...route, distance: route.distanceKm } : emptyFallback(null, null, 'InvalidCoords');
+    }
+
+    // Signature C: 4 args with coord objects -> calculateDistanceBetween(origin, destination, originCoords, destCoords)
+    if (arguments.length >= 4 && (typeof arg3 === 'object' || typeof arg4 === 'object')) {
+        origin = { ...(typeof arg3 === 'object' && arg3 !== null ? arg3 : {}), address: typeof origin === 'string' ? origin : origin?.address };
+        destination = { ...(typeof arg4 === 'object' && arg4 !== null ? arg4 : {}), address: typeof destination === 'string' ? destination : destination?.address };
+    }
+
+    // Signature D: 3 args with options/coords object -> calculateDistanceBetween(origin, destination, options)
+    if (arguments.length === 3 && arg3 && typeof arg3 === 'object') {
+        const pLat = arg3.pLat ?? arg3.pickupLat ?? arg3.originLat ?? arg3.lat1;
+        const pLng = arg3.pLng ?? arg3.pLon ?? arg3.pickupLng ?? arg3.originLng ?? arg3.lon1 ?? arg3.lng1;
+        const dLat = arg3.dLat ?? arg3.dropLat ?? arg3.destLat ?? arg3.lat2;
+        const dLng = arg3.dLng ?? arg3.dLon ?? arg3.dropLng ?? arg3.destLng ?? arg3.lon2 ?? arg3.lng2;
+        if (pLat != null && pLng != null) {
+            origin = { lat: pLat, lng: pLng, address: typeof origin === 'string' ? origin : origin?.address };
+        }
+        if (dLat != null && dLng != null) {
+            destination = { lat: dLat, lng: dLng, address: typeof destination === 'string' ? destination : destination?.address };
+        }
+    }
+
+    if (!origin || !destination) {
+        return emptyFallback(null, null, 'MissingEndpoints');
+    }
+
+    const resolvePoint = async (point) => {
+        if (!point) return null;
+
+        if (Array.isArray(point) && point.length >= 2) {
+            const lat = parseFloat(point[0]);
+            const lng = parseFloat(point[1]);
+            if (!isNaN(lat) && !isNaN(lng) && (lat !== 0 || lng !== 0)) return { lat, lng, address: '' };
+        }
+
+        if (typeof point === 'string') {
+            const trimmed = normalizeQuery(point);
+            if (!trimmed) return null;
+
+            // Handle "lat, lng" coordinate strings directly
+            const coordMatch = trimmed.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+            if (coordMatch) {
+                return {
+                    lat: parseFloat(coordMatch[1]),
+                    lng: parseFloat(coordMatch[2]),
+                    address: trimmed
+                };
+            }
+
+            const coords = await getCoordinates(trimmed);
+            return coords
+                ? { lat: coords.lat, lng: coords.lng, address: coords.displayName || trimmed }
+                : { lat: null, lng: null, address: trimmed };
+        }
+
+        if (typeof point === 'object') {
+            const nested = point.location || point.coords || {};
+            const rawLat = point.lat ?? point.latitude ?? nested.lat ?? nested.latitude;
+            const rawLng = point.lng ?? point.lon ?? point.longitude ?? nested.lng ?? nested.lon ?? nested.longitude;
+            const address =
+                point.address ||
+                point.displayName ||
+                point.name ||
+                point.city ||
+                point.label ||
+                point.place ||
+                point.text ||
+                point.value ||
+                '';
+
+            const parsedLat = parseFloat(rawLat);
+            const parsedLng = parseFloat(rawLng);
+            if (rawLat != null && rawLng != null && !isNaN(parsedLat) && !isNaN(parsedLng) && (parsedLat !== 0 || parsedLng !== 0)) {
+                return {
+                    lat: parsedLat,
+                    lng: parsedLng,
+                    address: address ? normalizeQuery(String(address)) : ''
+                };
+            }
+
+            if (address) {
+                const cleanAddr = normalizeQuery(String(address));
+                const coords = await getCoordinates(cleanAddr);
+                return coords
+                    ? { lat: coords.lat, lng: coords.lng, address: coords.displayName || cleanAddr }
+                    : { lat: null, lng: null, address: cleanAddr };
+            }
+        }
+
+        return null;
+    };
+
+    const [p1, p2] = await Promise.all([resolvePoint(origin), resolvePoint(destination)]);
+    if (!p1 || !p2) {
+        return emptyFallback(p1, p2, 'InvalidEndpoints');
+    }
+
+    // Primary path: Redis -> Google Routes -> OSRM -> Haversine
+    if (p1.lat != null && p1.lng != null && p2.lat != null && p2.lng != null) {
+        const result = await getDrivingDistanceByCoords(p1.lat, p1.lng, p2.lat, p2.lng);
+        if (result) {
+            return {
+                ...result,
+                distance: result.distanceKm,
+                origin: p1,
+                destination: p2
+            };
+        }
+    }
+
+    // Fallback path: let Google Routes geocode and route raw addresses directly
+    if (p1.address && p2.address) {
+        const directGoogle = await getGoogleDrivingDistance(p1.lat, p1.lng, p2.lat, p2.lng, p1.address, p2.address);
+        if (directGoogle) {
+            return {
+                ...directGoogle,
+                distance: directGoogle.distanceKm,
+                origin: p1,
+                destination: p2
+            };
+        }
+    }
+
+    return emptyFallback(p1, p2, 'UnresolvedFallback');
+}
+
 module.exports = {
+    normalizeQuery,
+    resolveAlias,
+    expandStateAbbreviations,
+    calculateHaversineDistance,
+    saveOrUpdateCity,
+    getGoogleDrivingDistance,
+    searchGooglePlacesText,
+    searchGooglePlaces,
+    searchGooglePlacesAutocomplete,
     getCoordinates,
     searchLocations,
     getDrivingDistanceByCoords,
-    calculateDistanceBetween,
-    calculateHaversineDistance,
-    resolveAlias,
-    saveOrUpdateCity,
-    getGoogleDrivingDistance,
-    searchGooglePlacesAutocomplete,
-    redisService
+    calculateDistanceBetween
 };
