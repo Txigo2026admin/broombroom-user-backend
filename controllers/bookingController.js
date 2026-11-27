@@ -122,7 +122,7 @@ exports.createBooking = async (req, res) => {
     });
 }
         if (!bookingData.serviceType) bookingData.serviceType = 'Outstation oneway';
-        if (!bookingData.state) bookingData.state = 'West Bengal';
+        if (!bookingData.state) bookingData.state = 'null';
         if (!bookingData.pickupDate) bookingData.pickupDate = new Date().toISOString().split('T')[0];
         if (!bookingData.pickupTime) bookingData.pickupTime = '10:00 AM';
         if (!bookingData.vehicleCategory) bookingData.vehicleCategory = 'Sedan';

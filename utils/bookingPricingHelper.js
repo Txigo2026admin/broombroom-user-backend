@@ -21,8 +21,14 @@ const DEFAULT_ADDON_PRICES = {
 /**
  * Calculates total addon amount from addons object or array
  */
+
 function calculateAddonTotal(addons, explicitAddonAmount) {
-    if (explicitAddonAmount !== undefined && explicitAddonAmount !== null && !isNaN(Number(explicitAddonAmount)) && Number(explicitAddonAmount) > 0) {
+    if (
+        explicitAddonAmount !== undefined &&
+        explicitAddonAmount !== null &&
+        !isNaN(Number(explicitAddonAmount)) &&
+        Number(explicitAddonAmount) > 0
+    ) {
         return Number(explicitAddonAmount);
     }
 
@@ -30,37 +36,74 @@ function calculateAddonTotal(addons, explicitAddonAmount) {
 
     let total = 0;
 
-    // Array format: [{ key: 'roofCarrier', price: 157 }, ...] or ['roofCarrier']
+    // Array format
     if (Array.isArray(addons)) {
         for (const item of addons) {
             if (!item) continue;
+
             if (typeof item === 'object') {
-                if (item.price !== undefined && !isNaN(Number(item.price)) && Number(item.price) > 0) {
+                if (
+                    item.price !== undefined &&
+                    !isNaN(Number(item.price))
+                ) {
                     total += Number(item.price);
                 } else {
-                    const key = (item.key || item.name || item.id || '').toLowerCase();
-                    total += resolveAddonKeyPrice(key);
+                    const key = (
+                        item.key || item.name || item.id || ''
+                    ).toLowerCase();
+
+                    if (key === 'petallowance') {
+                        const count = Math.max(
+                            1,
+                            Math.floor(Number(item.petCount) || 1)
+                        );
+                        total += DEFAULT_ADDON_PRICES.petAllowance * count;
+                    } else {
+                        total += resolveAddonKeyPrice(key);
+                    }
                 }
             } else if (typeof item === 'string') {
                 total += resolveAddonKeyPrice(item.toLowerCase());
             }
         }
+
         return total;
     }
 
-    // Object format: { petAllowance: 1001, roofCarrier: true, ... }
-    if (typeof addons === 'object') {
-        for (const [key, val] of Object.entries(addons)) {
-            if (!val) continue;
-            if (typeof val === 'number') {
-                if (val > 10) {
-                    total += val;
-                } else if (val > 0) {
-                    total += resolveAddonKeyPrice(key.toLowerCase()) * val;
-                }
-            } else if (val === true || val === 'true') {
-                total += resolveAddonKeyPrice(key.toLowerCase());
+    if (typeof addons !== 'object') return 0;
+
+    // Pet addon: price multiplied by pet quantity exactly once
+    const petSelected =
+        addons.petAllowance === true ||
+        addons.petAllowance === 'true';
+
+    if (petSelected) {
+        const petCount = Math.max(
+            1,
+            Math.floor(Number(addons.petCount) || 1)
+        );
+
+        total += DEFAULT_ADDON_PRICES.petAllowance * petCount;
+    }
+
+    // Calculate all other addons
+    for (const [key, val] of Object.entries(addons)) {
+
+        // Prevent pet addon and quantity from being counted again
+        if (key === 'petAllowance' || key === 'petCount') {
+            continue;
+        }
+
+        if (!val) continue;
+
+        if (typeof val === 'number') {
+            if (val > 10) {
+                total += val;
+            } else if (val > 0) {
+                total += resolveAddonKeyPrice(key) * val;
             }
+        } else if (val === true || val === 'true') {
+            total += resolveAddonKeyPrice(key);
         }
     }
 

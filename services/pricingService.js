@@ -10,7 +10,7 @@ const mapService = require('./mapService');
 
 // ---------- Add‑on prices (Live DB lookup with defaults) ----------
 const DEFAULT_ADDON_PRICES = {
-    petAllowance: 1001,
+    petAllowance: 0,
     roofCarrier: 157,
     assuredLuggageSpace: 157,
     language: 209,
